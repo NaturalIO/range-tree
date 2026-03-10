@@ -1,12 +1,31 @@
 [package]
-name = "rust-template"
-version = "0.0.1"
+name = "range_tree"
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+description = "A range tree implement for slab allocator"
+keywords = ["collection"]
+categories = ["data-structures", "no-std"]
+homepage = "https://github.com/NaturalIO/range_tree"
 
 [dependencies]
+embed-collections = {version=">=0.2", features=["avl"], default-features=false}
 
 [package.metadata.docs.rs]
 all-features = true
 # enable features in the documentation
 rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.clippy]
+new_ret_no_self = "allow"
+needless_range_loop = "allow"
+type_complexity = "allow"
+mut_from_ref = "allow"
+transmute_ptr_to_ref = "allow"
+len_without_is_empty = "allow"
+new_without_default = "allow"
+result_unit_err = "allow"
+
+[[bench]]
+name = "range_tree"
+harness = false
