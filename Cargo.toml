@@ -11,6 +11,10 @@ homepage = "https://github.com/NaturalIO/range_tree"
 [dependencies]
 embed-collections = {version=">=0.2", features=["avl"], default-features=false}
 
+[features]
+default = ["std"]
+std = []
+
 [package.metadata.docs.rs]
 all-features = true
 # enable features in the documentation
