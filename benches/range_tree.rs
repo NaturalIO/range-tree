@@ -1,5 +1,5 @@
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
-use embed_collections::range_tree::{DummyAllocator, RangeTree};
+use range_tree_rs::{DummyAllocator, RangeTree};
 
 fn bench_range_tree_insert_fragmented(c: &mut Criterion) {
     let count = 10000;

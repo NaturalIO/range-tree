@@ -11,6 +11,9 @@ homepage = "https://github.com/NaturalIO/range_tree"
 [dependencies]
 embed-collections = {version=">=0.2", features=["avl"], default-features=false}
 
+[dev-dependencies]
+criterion2 = { version = "3.0.2"}
+
 [features]
 default = ["std"]
 std = []
