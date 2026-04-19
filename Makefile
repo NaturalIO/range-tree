@@ -18,11 +18,11 @@ test-all:
 
 .PHONY: test
 test: init
-	cargo test ${ARGS} --  --nocapture --test-threads=1
+	cargo test ${ARGS} --  --no-capture --test-threads=1
 
 .PHONY: test_release
 test_release: init
-	cargo test ${ARGS} --release --  --nocapture --test-threads=1
+	cargo test ${ARGS} --release --  --no-capture --test-threads=1
 
 
 .PHONY: build
