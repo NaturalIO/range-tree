@@ -226,21 +226,6 @@ fn range_tree_remove() {
 }
 
 #[test]
-fn range_tree_walk() {
-    let mut rt = RangeTree::<u64>::new();
-    rt.add(0, 2).unwrap();
-    rt.add(4, 4).unwrap();
-    rt.add(12, 8).unwrap();
-    rt.add(32, 16).unwrap();
-    assert_eq!(30, rt.get_space());
-    assert_eq!(4, rt.get_count());
-
-    rt.walk(|(start, size)| {
-        println!("walk callback cb_print range_seg:[{:?}, {:?}]", start, start + size);
-    });
-}
-
-#[test]
 fn range_tree_iter() {
     let mut rt = RangeTree::<u64>::new();
     rt.add(0, 2).unwrap();

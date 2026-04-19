@@ -14,6 +14,8 @@ use core::{
 use embed_collections::btree::{BTreeMap, Entry};
 use num_traits::*;
 
+pub use embed_collections::btree::{IntoIter, Iter};
+
 pub trait RangeTreeKey:
     Unsigned + AddAssign + SubAssign + Ord + Copy + fmt::Debug + fmt::Display + Default
 {
@@ -53,44 +55,6 @@ impl<T: RangeTreeKey> RangeTreeOps<T> for DummyAllocator {
     #[inline]
     fn op_remove(&mut self, _start: T, _end: T) {}
 }
-
-/*
-pub struct RangeTreeIter<'a, T: RangeTreeOps<T>> {
-    tree: &'a RangeTree<T>,
-    current: Option<&'a RangeSeg<T>>,
-}
-
-unsafe impl<'a, T: RangeTreeOps<T>> Send for RangeTreeIter<'a, T> {}
-
-impl<'a, T: RangeTreeOps<T>> Iterator for RangeTreeIter<'a, T> {
-    type Item = &'a RangeSeg<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let current = self.current.take();
-        if let Some(seg) = current {
-            self.current = self.tree.root.next(seg);
-        }
-        current
-    }
-}
-
-impl<'a, T: RangeTreeOps<T>> IntoIterator for &'a RangeTree<T> {
-    type Item = &'a RangeSeg<T>;
-    type IntoIter = RangeTreeIter<'a, T>;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-#[allow(dead_code)]
-impl<T: RangeTreeOps<T>> Default for RangeTree<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-*/
 
 impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
     pub fn new() -> Self {
@@ -457,25 +421,8 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
         self.tree.range(start..end).next().map(|(&k, &sz)| (k, sz))
     }
 
-    #[inline]
-    pub fn iter(&self) -> embed_collections::btree::Iter<'_, T, T> {
+    pub fn iter(&self) -> Iter<'_, T, T> {
         self.tree.iter()
-    }
-
-    #[inline]
-    pub fn walk<F: FnMut((T, T))>(&self, mut cb: F) {
-        for (&start, &size) in self.tree.iter() {
-            cb((start, size));
-        }
-    }
-
-    #[inline]
-    pub fn walk_conditioned<F: FnMut((T, T)) -> bool>(&self, mut cb: F) {
-        for (&start, &size) in self.tree.iter() {
-            if !cb((start, size)) {
-                break;
-            }
-        }
     }
 
     pub fn validate(&self) {
@@ -485,7 +432,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
 
 impl<'a, T: RangeTreeKey, O: RangeTreeOps<T>> IntoIterator for &'a RangeTreeCustom<T, O> {
     type Item = (&'a T, &'a T);
-    type IntoIter = embed_collections::btree::Iter<'a, T, T>;
+    type IntoIter = Iter<'a, T, T>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -493,58 +440,12 @@ impl<'a, T: RangeTreeKey, O: RangeTreeOps<T>> IntoIterator for &'a RangeTreeCust
     }
 }
 
-/*
-    /// Legacy AVL Implementation for reference:
-
-    /// return only when segment overlaps with [start, start+size]
-    #[inline]
-    pub fn find(&self, start: u64, size: u64) -> Option<Arc<RangeSeg<T>>> {
-        if self.root.get_count() == 0 {
-            return None;
-        }
-        assert!(size > 0, "range tree find size={} error", size);
-        let end = start + size;
-        let rs = RangeSeg { start: Cell::new(start), end: Cell::new(end), ..Default::default() };
-        let result = self.root.find(&rs, range_tree_segment_cmp);
-        result.get_exact()
-    }
-
-    /// return only when segment intersect with [start, size], if multiple segment exists, return the
-    /// smallest start
-    #[inline]
-    pub fn find_contained(&self, start: u64, size: u64) -> Option<&RangeSeg<T>> {
-        assert!(size > 0, "range tree find size={} error", size);
-        if self.root.get_count() == 0 {
-            return None;
-        }
-        let end = start + size;
-        let rs_search = RangeSeg { start: Cell::new(start), end: Cell::new(end), ..Default::default() };
-        self.root.find_contained(&rs_search, range_tree_segment_cmp)
-    }
+impl<T: RangeTreeKey, O: RangeTreeOps<T>> IntoIterator for RangeTreeCustom<T, O> {
+    type Item = (T, T);
+    type IntoIter = IntoIter<T, T>;
 
     #[inline]
-    pub fn iter(&self) -> RangeTreeIter<'_, T> {
-        RangeTreeIter { tree: self, current: self.root.first() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.tree.into_iter()
     }
-
-    #[inline]
-    pub fn walk<F: FnMut(&RangeSeg<T>)>(&self, mut cb: F) {
-        let mut node = self.root.first();
-        while let Some(_node) = node {
-            cb(_node);
-            node = self.root.next(_node);
-        }
-    }
-
-    /// If cb returns false, break
-    #[inline]
-    pub fn walk_conditioned<F: FnMut(&RangeSeg<T>) -> bool>(&self, mut cb: F) {
-        let mut node = self.root.first();
-        while let Some(_node) = node {
-            if !cb(_node) {
-                break;
-            }
-            node = self.root.next(_node);
-        }
-    }
-*/
+}
