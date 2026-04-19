@@ -1,5 +1,5 @@
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
-use range_tree_rs::{DummyAllocator, RangeTree};
+use range_tree_rs::RangeTree;
 
 fn bench_range_tree_insert_fragmented(c: &mut Criterion) {
     let count = 10000;
@@ -13,9 +13,9 @@ fn bench_range_tree_insert_fragmented(c: &mut Criterion) {
     group.throughput(Throughput::Elements(count as u64));
     group.bench_function("insert_10000_fragments", |b| {
         b.iter(|| {
-            let mut tree = RangeTree::<DummyAllocator>::new();
+            let mut tree = RangeTree::<u64>::new();
             for &(start, size) in &ranges {
-                tree.add(black_box(start), black_box(size));
+                tree.add(black_box(start), black_box(size)).expect("add");
             }
         })
     });
