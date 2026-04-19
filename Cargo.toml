@@ -9,7 +9,8 @@ categories = ["data-structures", "no-std"]
 homepage = "https://github.com/NaturalIO/range_tree"
 
 [dependencies]
-embed-collections = {version=">=0.2", features=["avl"], default-features=false}
+embed-collections = {version=">=0.8", features=["btree"], default-features=false}
+num-traits = "0.2"
 
 [dev-dependencies]
 criterion2 = { version = "3.0.2"}
