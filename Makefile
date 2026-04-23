@@ -14,16 +14,18 @@ fmt: init
 	cargo fmt
 
 .PHONY: test-all
-test-all:
+test-all: test test-release test-leak
 
 .PHONY: test
 test: init
-	cargo test ${ARGS} --  --no-capture --test-threads=1
+	RUST_BACKTRACE=1 cargo test ${ARGS} --  --nocapture --test-threads=1
 
 .PHONY: test_release
-test_release: init
-	cargo test ${ARGS} --release --  --no-capture --test-threads=1
+test-release: init
+	RUST_BACKTRACE=1 cargo test ${ARGS} --release --  --nocapture --test-threads=1
 
+test-leak:
+	RUST_BACKTRACE=1 RUSTFLAGS="-Zsanitizer=leak" cargo +nightly nextest run ${ARGS} -F trace_log -r --no-capture -j 1
 
 .PHONY: build
 build: init
