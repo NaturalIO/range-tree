@@ -1,4 +1,9 @@
+use captains_log::*;
 use range_tree_rs::*;
+use rstest::rstest;
+
+mod common;
+use common::setup_log;
 
 fn range_tree_print<T: RangeTreeKey, O: RangeTreeOps<T>>(rt: &RangeTreeCustom<T, O>) {
     for (&k, &v) in rt.iter() {
@@ -6,14 +11,16 @@ fn range_tree_print<T: RangeTreeKey, O: RangeTreeOps<T>>(rt: &RangeTreeCustom<T,
     }
 }
 
-#[test]
-fn range_tree_size() {
+#[logfn]
+#[rstest]
+fn range_tree_size(setup_log: ()) {
     let size = core::mem::size_of::<RangeTree<u64>>();
     println!("size {size}");
 }
 
-#[test]
-fn range_tree_add() {
+#[logfn]
+#[rstest]
+fn range_tree_add(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
     assert!(rt.find(0, 10).is_none());
     assert_eq!(0, rt.get_space());
@@ -76,8 +83,9 @@ fn range_tree_add() {
     rt.validate();
 }
 
-#[test]
-fn range_tree_add_and_merge() {
+#[logfn]
+#[rstest]
+fn range_tree_add_and_merge(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
     assert!(rt.find(0, 10).is_none());
     assert_eq!(0, rt.get_space());
@@ -166,8 +174,9 @@ fn range_tree_add_and_merge() {
     rt.validate();
 }
 
-#[test]
-fn range_tree_remove() {
+#[logfn]
+#[rstest]
+fn range_tree_remove(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
     // add [0, 15]
     rt.add(0, 15).unwrap();
@@ -225,8 +234,9 @@ fn range_tree_remove() {
     rt.validate();
 }
 
-#[test]
-fn range_tree_iter() {
+#[logfn]
+#[rstest]
+fn range_tree_iter(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
     rt.add(0, 2).unwrap();
     rt.add(4, 4).unwrap();
@@ -257,8 +267,9 @@ fn range_tree_iter() {
     assert_eq!(ranges_from_for, vec![(0, 2), (4, 4), (12, 8), (32, 16)]);
 }
 
-#[test]
-fn range_tree_find_overlap() {
+#[logfn]
+#[rstest]
+fn range_tree_find_overlap(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
     rt.add_abs(2044, 2052);
     rt.add_abs(4092, 4096);
@@ -286,8 +297,9 @@ fn range_tree_find_overlap() {
     assert_eq!(rt.get_space(), 0);
 }
 
-#[test]
-fn range_tree_find_overlap_simple() {
+#[logfn]
+#[rstest]
+fn range_tree_find_overlap_simple(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
     rt.add_abs(20, 80);
     rt.add_abs(120, 180);
@@ -302,8 +314,9 @@ fn range_tree_find_overlap_simple() {
     assert_eq!(rs_size, 60);
 }
 
-#[test]
-fn range_tree_remove1() {
+#[logfn]
+#[rstest]
+fn range_tree_remove1(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [0, 15]
@@ -362,8 +375,9 @@ fn range_tree_remove1() {
     rt.validate();
 }
 
-#[test]
-fn range_tree_remove2() {
+#[logfn]
+#[rstest]
+fn range_tree_remove2(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [1, 16]
@@ -396,8 +410,9 @@ fn range_tree_remove2() {
     rt.validate();
 }
 
-#[test]
-fn range_tree_remove3() {
+#[logfn]
+#[rstest]
+fn range_tree_remove3(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [1, 16]
@@ -446,8 +461,9 @@ fn range_tree_remove3() {
     rt.validate();
 }
 
-#[test]
-fn range_tree_remove4() {
+#[logfn]
+#[rstest]
+fn range_tree_remove4(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [1, 16]
@@ -481,8 +497,9 @@ fn range_tree_remove4() {
     rt.validate();
 }
 
-#[test]
-fn range_tree_remove5() {
+#[logfn]
+#[rstest]
+fn range_tree_remove5(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [1, 16]

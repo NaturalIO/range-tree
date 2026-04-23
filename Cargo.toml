@@ -11,13 +11,19 @@ homepage = "https://github.com/NaturalIO/range_tree"
 [dependencies]
 embed-collections = {version=">=0.8", features=["btree"], default-features=false}
 num-traits = "0.2"
+log = { version="0", optional=true}
 
 [dev-dependencies]
 criterion2 = { version = "3.0.2"}
+captains-log = {version="0", features = ["ringfile"] }
+log = { version="0"}
+rstest = "0"
 
 [features]
 default = ["std"]
 std = []
+# enable log for dev
+trace_log = ["dep:log", "embed-collections/trace_log"]
 
 [package.metadata.docs.rs]
 all-features = true
