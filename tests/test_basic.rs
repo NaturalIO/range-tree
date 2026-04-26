@@ -291,9 +291,7 @@ fn range_tree_find_overlap(setup_log: ()) {
     range_tree_print(&rt);
     let _space1 = rt.get_space();
     assert!(rt.remove(0, 66064384));
-    assert!(rt.get_space() > 0, "only remove one");
     range_tree_print(&rt);
-    rt.remove_and_split(0, 66064384); // remove all
     assert_eq!(rt.get_space(), 0);
 }
 
@@ -325,7 +323,7 @@ fn range_tree_remove1(setup_log: ()) {
     assert_eq!(1, rt.get_count());
 
     // remove [7, 10] expect [0, 7] [10, 15]
-    rt.remove_and_split(7, 3);
+    rt.remove(7, 3);
     assert_eq!(12, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -335,7 +333,7 @@ fn range_tree_remove1(setup_log: ()) {
     rt.validate();
 
     // remove right over [13, 18] expect [0, 7] [10, 13]
-    rt.remove_and_split(13, 5);
+    rt.remove(13, 5);
     assert_eq!(10, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -345,7 +343,7 @@ fn range_tree_remove1(setup_log: ()) {
     rt.validate();
 
     // remove nothing [9, 10] expect [0, 7] [10, 13]
-    assert!(!rt.remove_and_split(9, 1));
+    assert!(!rt.remove(9, 1));
     assert_eq!(10, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -355,7 +353,7 @@ fn range_tree_remove1(setup_log: ()) {
     rt.validate();
 
     // remove left over [9, 11] expect [0, 7] [11, 13]
-    rt.remove_and_split(9, 2);
+    rt.remove(9, 2);
     assert_eq!(9, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -365,7 +363,7 @@ fn range_tree_remove1(setup_log: ()) {
     rt.validate();
 
     // remove [6, 12] expect [0, 6] [12, 13]
-    rt.remove_and_split(6, 6);
+    rt.remove(6, 6);
     assert_eq!(7, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -391,7 +389,7 @@ fn range_tree_remove2(setup_log: ()) {
     rt.validate();
 
     // remove left over and right over [0, 20] expect []
-    rt.remove_and_split(0, 20);
+    rt.remove(0, 20);
     assert_eq!(0, rt.get_space());
     assert_eq!(0, rt.get_count());
 
@@ -446,7 +444,7 @@ fn range_tree_remove3(setup_log: ()) {
     rt.validate();
 
     // remove left over and right over [6, 56] expect [1, 6] [56, 64]
-    rt.remove_and_split(6, 50);
+    rt.remove(6, 50);
     assert_eq!(13, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -487,7 +485,7 @@ fn range_tree_remove4(setup_log: ()) {
     rt.validate();
 
     // remove right over [6, 56] expect [1, 6]
-    rt.remove_and_split(6, 50);
+    rt.remove(6, 50);
     assert_eq!(5, rt.get_space());
     assert_eq!(1, rt.get_count());
 
@@ -523,7 +521,7 @@ fn range_tree_remove5(setup_log: ()) {
     rt.validate();
 
     // remove left over [0, 40] expect [40, 48]
-    rt.remove_and_split(0, 40);
+    rt.remove(0, 40);
     assert_eq!(8, rt.get_space());
     assert_eq!(1, rt.get_count());
 

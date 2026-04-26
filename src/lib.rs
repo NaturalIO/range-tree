@@ -30,6 +30,7 @@ pub struct RangeTreeCustom<T: RangeTreeKey, O>
 where
     O: RangeTreeOps<T>,
 {
+    // the tree stores ranges in [key:start, value:size) format
     tree: BTreeMap<T, T>,
     space: T,
     ops: O,
@@ -86,10 +87,12 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
         self.tree.len()
     }
 
-    /// Add range segment, merge with adjacent ranges.
+    /// Add range segment, merge with adjacent ranges, assuming no intersections.
     ///
     /// Returns `Ok(())` if there are no intersection;
     /// otherwise returns the overlapping range as `Err((existing_start, existing_size))`.
+    ///
+    /// This equals to add + add_find_overlap in v0.1
     #[inline]
     pub fn add(&mut self, start: T, size: T) -> Result<(), (T, T)> {
         assert!(size > T::zero(), "range tree add size={} error", size);
@@ -189,7 +192,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
         let _ = self.add(start, end - start);
     }
 
-    /// Add range which may be crossed section or larger with existing, will merge the range
+    /// Add range which may have multiple intersections with existing range, ensuring union result
     #[inline]
     pub fn add_and_merge(&mut self, start: T, size: T) {
         assert!(size > T::zero(), "range tree add size error");
@@ -286,6 +289,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                         ve.insert(size);
                         remove_intersect!(next_start, new_end);
                         if !handled_by_recursion {
+                            // TODO is it possible to remove and get next entry?
                             if let Entry::Occupied(o) = self.tree.entry(base_start) {
                                 self.ops.op_add(base_start, base_start + *o.get());
                             }
@@ -308,96 +312,103 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
         }
     }
 
-    /// Ensure remove all overlapping range
+    /// Remove all the intersection ranges in the tree (might span across multiple range)
     ///
-    /// Returns true if removal happens
-    #[inline(always)]
-    pub fn remove_and_split(&mut self, start: T, size: T) -> bool {
-        let mut removed = false;
-        while self.remove(start, size) {
-            removed = true;
-        }
-        removed
-    }
-
-    /// Only used when remove range overlap one segment,
+    /// Equals to remove_and_split in v0.1
     ///
-    /// NOTE: If not the case (start, size) might overlaps with multiple segment,  use remove_and_split() instead.
-    /// return true when one segment is removed.
+    /// return true if overlapping range found and removed
     #[inline]
-    pub fn remove(&mut self, start: T, size: T) -> bool {
+    pub fn remove(&mut self, mut start: T, mut size: T) -> bool {
         let end = start + size;
-        match self.tree.entry(start) {
-            Entry::Occupied(mut oent) => {
-                let rs_size = *oent.get();
-                self.ops.op_remove(start, start + rs_size);
-                if rs_size > size {
-                    // Shrink from front
-                    let new_start = start + size;
-                    let new_size = rs_size - size;
-                    oent.alter_key(new_start).expect("shrink alter_key");
-                    *oent.get_mut() = new_size;
-                    self.ops.op_add(new_start, new_start + new_size);
-                    self.space -= size;
-                } else {
-                    // Exact match or subset removed
-                    oent.remove();
-                    self.space -= rs_size;
-                }
-                true
-            }
-            Entry::Vacant(vent) => {
-                if let Some((&rs_start, &rs_size)) = vent.peak_backward() {
-                    let rs_end = rs_start + rs_size;
-                    if rs_end > start {
-                        let mut oent = vent.move_backward().expect("move back to overlapping");
-                        self.ops.op_remove(rs_start, rs_end);
-                        let size_deduce: T;
-
-                        if rs_end > end {
-                            // Split in middle
-                            *oent.get_mut() = start - rs_start;
-                            self.tree.insert(end, rs_end - end);
-                            self.ops.op_add(rs_start, start);
-                            self.ops.op_add(end, rs_end);
-                            size_deduce = size;
-                        } else {
-                            // Shrink from back
-                            *oent.get_mut() = start - rs_start;
-                            self.ops.op_add(rs_start, start);
-                            size_deduce = rs_end - start;
+        let mut ent = self.tree.entry(start);
+        let mut removed = false;
+        loop {
+            match ent {
+                Entry::Occupied(mut oent) => {
+                    let rs_size = *oent.get();
+                    self.ops.op_remove(start, start + rs_size);
+                    if rs_size == size {
+                        // Exact match or subset removed
+                        oent.remove();
+                        self.space -= rs_size;
+                        return true;
+                    } else if rs_size > size {
+                        // Shrink from front
+                        let new_start = start + size;
+                        let new_size = rs_size - size;
+                        oent.alter_key(new_start).expect("shrink alter_key");
+                        *oent.get_mut() = new_size;
+                        self.ops.op_add(new_start, new_start + new_size);
+                        self.space -= size;
+                        return true;
+                    } else {
+                        if let Some((_next_start, _next_size)) = oent.peak_forward() {
+                            if *_next_start < end {
+                                start = *_next_start;
+                                size = end - start;
+                                self.space -= *oent.get();
+                                oent.remove();
+                                ent = self.tree.entry(start);
+                                removed = true;
+                                continue;
+                            }
                         }
-                        self.space -= size_deduce;
+                        self.space -= rs_size;
+                        oent.remove();
                         return true;
                     }
                 }
-
-                // Handle the case where range starts before the first overlapping segment
-                if let Some((&ns, _)) = vent.peak_forward() {
-                    if ns < end {
-                        let mut oent = vent.move_forward().expect("move forward to overlapping");
-                        let rs_start = *oent.key();
-                        let rs_size = *oent.get();
+                Entry::Vacant(vent) => {
+                    if let Some((&rs_start, &rs_size)) = vent.peak_backward() {
                         let rs_end = rs_start + rs_size;
-
-                        self.ops.op_remove(rs_start, rs_end);
-                        if rs_end > end {
-                            // Shrink from front
-                            let new_start = end;
-                            let new_size = rs_end - end;
-                            oent.alter_key(new_start).expect("shrink forward alter_key");
-                            *oent.get_mut() = new_size;
-                            self.ops.op_add(new_start, rs_end);
-                            self.space -= end - rs_start;
-                        } else {
-                            // Entirely removed
-                            oent.remove();
-                            self.space -= rs_size;
+                        if rs_end > start {
+                            let mut oent = vent.move_backward().expect("move back to overlapping");
+                            self.ops.op_remove(rs_start, rs_end);
+                            if rs_end > end {
+                                // punch a hold in the middle
+                                *oent.get_mut() = start - rs_start;
+                                // TODO optimize add insert after entry for btree
+                                self.tree.insert(end, rs_end - end);
+                                self.ops.op_add(rs_start, start);
+                                self.ops.op_add(end, rs_end);
+                                self.space -= size;
+                                return true;
+                            } else {
+                                // Shrink from back
+                                *oent.get_mut() = start - rs_start;
+                                self.ops.op_add(rs_start, start);
+                                self.space -= rs_end - start;
+                                if rs_end == end {
+                                    return true;
+                                }
+                                if let Some((next_start, _)) = oent.peak_forward() {
+                                    if *next_start < end {
+                                        start = *next_start;
+                                        size = end - *next_start;
+                                        ent = Entry::Occupied(
+                                            oent.move_forward()
+                                                .expect("move forward to overlapping"),
+                                        );
+                                        continue;
+                                    }
+                                }
+                                return true;
+                            }
                         }
-                        return true;
                     }
+                    // Handle the case where range starts before the first overlapping segment
+                    if let Some((next_start, _)) = vent.peak_forward() {
+                        if *next_start < end {
+                            start = *next_start;
+                            size = end - *next_start;
+                            ent = Entry::Occupied(
+                                vent.move_forward().expect("move forward to overlapping"),
+                            );
+                            continue;
+                        }
+                    }
+                    return removed;
                 }
-                false
             }
         }
     }
