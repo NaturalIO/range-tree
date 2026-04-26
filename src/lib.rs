@@ -9,20 +9,28 @@
 use core::{
     cmp::Ordering,
     fmt,
-    ops::{AddAssign, SubAssign},
+    ops::{AddAssign, Bound, RangeBounds, SubAssign},
 };
 use embed_collections::btree::{BTreeMap, Entry};
 use num_traits::*;
 
-pub use embed_collections::btree::{IntoIter, Iter};
+pub use embed_collections::btree::{Cursor, IntoIter, Iter};
 
 pub trait RangeTreeKey:
-    Unsigned + AddAssign + SubAssign + Ord + Copy + fmt::Debug + fmt::Display + Default
+    Unsigned + AddAssign + SubAssign + Ord + Copy + fmt::Debug + fmt::Display + Default + 'static
 {
 }
 
 impl<T> RangeTreeKey for T where
-    T: Unsigned + AddAssign + SubAssign + Ord + Copy + fmt::Debug + fmt::Display + Default
+    T: Unsigned
+        + AddAssign
+        + SubAssign
+        + Ord
+        + Copy
+        + fmt::Debug
+        + fmt::Display
+        + Default
+        + 'static
 {
 }
 
@@ -102,7 +110,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                 return Err((*ent.key(), *ent.get()));
             }
             Entry::Vacant(ent) => {
-                let merge_before = if let Some((_start, _size)) = ent.peak_backward() {
+                let merge_before = if let Some((_start, _size)) = ent.peek_backward() {
                     let _end = *_start + *_size;
                     match _end.cmp(&start) {
                         Ordering::Equal => true,
@@ -112,7 +120,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                 } else {
                     false
                 };
-                let merge_after = if let Some((_start, _size)) = ent.peak_forward() {
+                let merge_after = if let Some((_start, _size)) = ent.peek_forward() {
                     match (start + size).cmp(_start) {
                         Ordering::Equal => {
                             if merge_before {
@@ -207,7 +215,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                 Entry::Occupied(oe)
             }
             Entry::Vacant(ve) => {
-                if let Some((pre_start, pre_size)) = ve.peak_backward() {
+                if let Some((pre_start, pre_size)) = ve.peek_backward() {
                     let cur_end = *pre_start + *pre_size;
                     if cur_end >= new_end {
                         return;
@@ -254,7 +262,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                 self.space += final_size - old_size;
                 *oe.get_mut() = final_size;
 
-                if let Some((_next_start, _next_size)) = oe.peak_forward() {
+                if let Some((_next_start, _next_size)) = oe.peek_forward() {
                     let next_start = *_next_start;
                     let next_size = *_next_size;
                     if next_start < new_end {
@@ -282,7 +290,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                 let base_start = start;
                 self.space += size;
 
-                if let Some((_next_start, _next_size)) = ve.peak_forward() {
+                if let Some((_next_start, _next_size)) = ve.peek_forward() {
                     let next_start = *_next_start;
                     let next_size = *_next_size;
                     if next_start < new_end {
@@ -342,7 +350,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                         self.space -= size;
                         return true;
                     } else {
-                        if let Some((_next_start, _next_size)) = oent.peak_forward() {
+                        if let Some((_next_start, _next_size)) = oent.peek_forward() {
                             if *_next_start < end {
                                 start = *_next_start;
                                 size = end - start;
@@ -359,7 +367,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                     }
                 }
                 Entry::Vacant(vent) => {
-                    if let Some((&rs_start, &rs_size)) = vent.peak_backward() {
+                    if let Some((&rs_start, &rs_size)) = vent.peek_backward() {
                         let rs_end = rs_start + rs_size;
                         if rs_end > start {
                             let mut oent = vent.move_backward().expect("move back to overlapping");
@@ -381,7 +389,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                                 if rs_end == end {
                                     return true;
                                 }
-                                if let Some((next_start, _)) = oent.peak_forward() {
+                                if let Some((next_start, _)) = oent.peek_forward() {
                                     if *next_start < end {
                                         start = *next_start;
                                         size = end - *next_start;
@@ -397,7 +405,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                         }
                     }
                     // Handle the case where range starts before the first overlapping segment
-                    if let Some((next_start, _)) = vent.peak_forward() {
+                    if let Some((next_start, _)) = vent.peek_forward() {
                         if *next_start < end {
                             start = *next_start;
                             size = end - *next_start;
@@ -415,21 +423,26 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
 
     /// return only when segment overlaps with [start, start+size]
     #[inline]
-    pub fn find(&self, start: T, size: T) -> Option<(T, T)> {
-        if self.tree.is_empty() {
-            return None;
-        }
-        let end = start + size;
-
-        // 1. Check for a segment that starts before 'start' but might overlap it
-        if let Some((&k, &sz)) = self.tree.range(..start).next_back() {
-            if k + sz > start {
-                return Some((k, sz));
+    pub fn range<'a, R: RangeBounds<T>>(&'a self, r: R) -> RangeIter<'a, T> {
+        let start = match r.start_bound() {
+            Bound::Included(start) => Some(*start),
+            Bound::Excluded(start) => Some(*start),
+            _ => None,
+        };
+        let cursor = if let Some(_start) = start {
+            let mut _cursor = self.tree.cursor(&_start);
+            if let Some((pre_start, pre_size)) = _cursor.peek_backward() {
+                let pre_end = *pre_start + *pre_size;
+                if pre_end > _start {
+                    _cursor.previous();
+                }
+                // TODO what if we find pre_start < start but pre_start + size >= start
             }
-        }
-
-        // 2. Check for the first segment that starts within [start, end)
-        self.tree.range(start..end).next().map(|(&k, &sz)| (k, sz))
+            _cursor
+        } else {
+            self.tree.first_cursor()
+        };
+        RangeIter { cursor, end: r.end_bound().cloned(), not_empty: true }
     }
 
     pub fn iter(&self) -> Iter<'_, T, T> {
@@ -458,5 +471,42 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> IntoIterator for RangeTreeCustom<T, O>
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.tree.into_iter()
+    }
+}
+
+pub struct RangeIter<'a, T: RangeTreeKey> {
+    cursor: Cursor<'a, T, T>,
+    end: Bound<T>,
+    not_empty: bool,
+}
+
+impl<'a, T: RangeTreeKey> Iterator for RangeIter<'a, T> {
+    type Item = (T, T);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.not_empty {
+            if let Some((start, size)) = self.cursor.next() {
+                match self.end {
+                    Bound::Unbounded => return Some((*start, *size)),
+                    Bound::Excluded(end) => {
+                        if *start < end {
+                            return Some((*start, *size));
+                        }
+                        self.not_empty = false;
+                        return None;
+                    }
+                    Bound::Included(end) => {
+                        if *start <= end {
+                            return Some((*start, *size));
+                        }
+                        self.not_empty = false;
+                        return None;
+                    }
+                }
+            }
+            self.not_empty = false;
+        }
+        return None;
     }
 }
