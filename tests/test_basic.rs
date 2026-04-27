@@ -85,12 +85,12 @@ fn range_tree_add(setup_log: ()) {
 
 #[logfn]
 #[rstest]
-fn range_tree_add_and_merge(setup_log: ()) {
+fn range_tree_add_loosely(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
     assert!(rt.find(0, 10).is_none());
     assert_eq!(0, rt.get_space());
 
-    rt.add_and_merge(0, 2);
+    rt.add_loosely(0, 2);
     assert_eq!(2, rt.get_space());
     assert_eq!(1, rt.get_count());
 
@@ -101,7 +101,7 @@ fn range_tree_add_and_merge(setup_log: ()) {
     assert!(rt.find(0, 3).is_some());
 
     // left join
-    rt.add_and_merge(2, 5);
+    rt.add_loosely(2, 5);
     assert_eq!(7, rt.get_space());
     assert_eq!(1, rt.get_count());
 
@@ -110,7 +110,7 @@ fn range_tree_add_and_merge(setup_log: ()) {
     assert_eq!((0, 7), rs.unwrap());
 
     // without join
-    rt.add_and_merge(15, 5);
+    rt.add_loosely(15, 5);
     assert_eq!(12, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -119,7 +119,7 @@ fn range_tree_add_and_merge(setup_log: ()) {
     assert_eq!((15, 5), rs.unwrap());
 
     // right join
-    rt.add_and_merge(13, 2);
+    rt.add_loosely(13, 2);
     assert_eq!(14, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -128,7 +128,7 @@ fn range_tree_add_and_merge(setup_log: ()) {
     assert_eq!((13, 7), rs.unwrap());
 
     // duplicate
-    rt.add_and_merge(14, 8);
+    rt.add_loosely(14, 8);
     assert_eq!(16, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -141,7 +141,7 @@ fn range_tree_add_and_merge(setup_log: ()) {
     assert_eq!((13, 9), rs.unwrap());
 
     // without join
-    rt.add_and_merge(25, 5);
+    rt.add_loosely(25, 5);
     assert_eq!(21, rt.get_space());
     assert_eq!(3, rt.get_count());
 
@@ -150,7 +150,7 @@ fn range_tree_add_and_merge(setup_log: ()) {
     assert_eq!((25, 5), rs.unwrap());
 
     // duplicate
-    rt.add_and_merge(12, 20);
+    rt.add_loosely(12, 20);
     assert_eq!(27, rt.get_space());
     assert_eq!(2, rt.get_count());
 
@@ -163,7 +163,7 @@ fn range_tree_add_and_merge(setup_log: ()) {
     assert_eq!((12, 20), rs.unwrap());
 
     // left and right join
-    rt.add_and_merge(7, 5);
+    rt.add_loosely(7, 5);
     assert_eq!(32, rt.get_space());
     assert_eq!(1, rt.get_count());
 

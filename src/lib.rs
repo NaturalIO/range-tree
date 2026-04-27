@@ -2,9 +2,6 @@
 #![cfg_attr(docsrs, allow(unused_attributes))]
 
 //! This crate provides a range-tree implementation, intended to manage range section with btree.
-//!
-//! [RangeTreeCustom<T>] is a generic for slab allocators. While for other simple usage, use the alias
-//! [RangeTree].
 
 use core::{
     cmp::Ordering,
@@ -34,50 +31,36 @@ impl<T> RangeTreeKey for T where
 {
 }
 
-pub struct RangeTreeCustom<T: RangeTreeKey, O>
-where
-    O: RangeTreeOps<T>,
-{
+pub struct RangeTree<T: RangeTreeKey> {
     // the tree stores ranges in [key:start, value:size) format
     tree: BTreeMap<T, T>,
     space: T,
-    ops: O,
 }
 
-/// A trait for allocator, triggers when range segment add /remove from the main RangeTree.
-pub trait RangeTreeOps<T: RangeTreeKey>: Sized + Default {
-    /// Callback for manage secondary tree
-    fn op_add(&mut self, start: T, end: T);
-    /// Callback for manage secondary tree
-    fn op_remove(&mut self, start: T, end: T);
+/// Trait for allocator
+///
+/// when range tree merge/split, need to mirror the adding and removal range from size_tree
+pub trait RangeTreeOps<T: RangeTreeKey> {
+    /// Callback for manage size tree
+    fn op_add(&mut self, start: T, size: T);
+    /// Callback for manage size tree
+    fn op_remove(&mut self, start: T, size: T);
 }
-
-pub type RangeTree<T> = RangeTreeCustom<T, DummyAllocator>;
 
 #[derive(Default)]
-pub struct DummyAllocator();
+pub struct DummyOps();
 
-impl<T: RangeTreeKey> RangeTreeOps<T> for DummyAllocator {
+impl<T: RangeTreeKey> RangeTreeOps<T> for DummyOps {
     #[inline]
-    fn op_add(&mut self, _start: T, _end: T) {}
+    fn op_add(&mut self, _start: T, _size: T) {}
 
     #[inline]
-    fn op_remove(&mut self, _start: T, _end: T) {}
+    fn op_remove(&mut self, _start: T, _size: T) {}
 }
 
-impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
+impl<T: RangeTreeKey> RangeTree<T> {
     pub fn new() -> Self {
-        Self { tree: BTreeMap::new(), space: T::zero(), ops: O::default() }
-    }
-
-    #[inline]
-    pub fn get_ops(&self) -> &O {
-        &self.ops
-    }
-
-    #[inline]
-    pub fn get_ops_mut(&mut self) -> &mut O {
-        &mut self.ops
+        Self { tree: BTreeMap::new(), space: T::zero() }
     }
 
     #[inline]
@@ -103,110 +86,90 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
     /// This equals to add + add_find_overlap in v0.1
     #[inline]
     pub fn add(&mut self, start: T, size: T) -> Result<(), (T, T)> {
+        self.add_with(start, size, &mut DummyOps {})
+    }
+
+    #[inline]
+    pub fn add_with<O>(&mut self, start: T, size: T, ops: &mut O) -> Result<(), (T, T)>
+    where
+        O: RangeTreeOps<T>,
+    {
         assert!(size > T::zero(), "range tree add size={} error", size);
-        let mut add_size = size;
+        let end = start + size;
+        let mut prev = None;
+        let mut next = None;
         match self.tree.entry(start) {
             Entry::Occupied(ent) => {
                 return Err((*ent.key(), *ent.get()));
             }
             Entry::Vacant(ent) => {
-                let merge_before = if let Some((_start, _size)) = ent.peek_backward() {
+                if let Some((_start, _size)) = ent.peek_backward() {
                     let _end = *_start + *_size;
                     match _end.cmp(&start) {
-                        Ordering::Equal => true,
-                        Ordering::Greater => return Err((*_start, *_size)),
-                        _ => false,
-                    }
-                } else {
-                    false
-                };
-                let merge_after = if let Some((_start, _size)) = ent.peek_forward() {
-                    match (start + size).cmp(_start) {
                         Ordering::Equal => {
-                            if merge_before {
-                                // avoid visiting the node again
-                                add_size += *_size;
-                            }
-                            true
+                            prev = Some((*_start, *_size));
                         }
                         Ordering::Greater => return Err((*_start, *_size)),
-                        _ => false,
-                    }
-                } else {
-                    false
-                };
-
-                match (merge_before, merge_after) {
-                    (false, false) => {
-                        self.ops.op_add(start, start + size);
-                        ent.insert(size);
-                        self.space += size;
-                    }
-                    (false, true) => {
-                        let mut ent_next = ent.move_forward().expect("merge next");
-                        let next_start = *ent_next.key();
-                        let next_size = *ent_next.get();
-
-                        self.ops.op_remove(next_start, next_start + next_size);
-
-                        *ent_next.get_mut() += size;
-                        ent_next.alter_key(start).expect("merge next alter_key");
-                        self.space += size;
-
-                        self.ops.op_add(start, next_start + next_size);
-                    }
-                    (true, false) => {
-                        let ent_prev_res = ent.move_backward();
-                        let mut ent_prev = ent_prev_res.expect("merge prev");
-                        let prev_start = *ent_prev.key();
-                        let prev_size = *ent_prev.get();
-
-                        self.ops.op_remove(prev_start, prev_start + prev_size);
-
-                        *ent_prev.get_mut() += size;
-                        self.space += size;
-
-                        self.ops.op_add(prev_start, prev_start + prev_size + size);
-                    }
-                    (true, true) => {
-                        let ent_prev = ent.move_backward().expect("merge prev");
-                        let prev_start = *ent_prev.key();
-                        let prev_size = *ent_prev.get();
-                        let ent_next = ent_prev.move_forward().expect("merge next");
-                        let next_start = *ent_next.key();
-                        let next_size = *ent_next.get();
-
-                        self.ops.op_remove(prev_start, prev_start + prev_size);
-                        self.ops.op_remove(next_start, next_start + next_size);
-
-                        // Refetch prev entry after moving forward and back or similar.
-                        let mut ent_prev = ent_next.move_backward().expect("merge prev refetch");
-                        *ent_prev.get_mut() += add_size;
-                        self.space += size; // only the newly added size contributes to space increase
-                        let ent_next = ent_prev.move_forward().expect("merge next");
-                        ent_next.remove();
-
-                        self.ops.op_add(prev_start, next_start + next_size);
+                        _ => {}
                     }
                 }
+                if let Some((_start, _size)) = ent.peek_forward() {
+                    match end.cmp(_start) {
+                        Ordering::Equal => {
+                            next = Some((*_start, *_size));
+                        }
+                        Ordering::Greater => return Err((*_start, *_size)),
+                        _ => {}
+                    }
+                }
+                match (prev, next) {
+                    (None, None) => {
+                        ops.op_add(start, size);
+                        ent.insert(size);
+                    }
+                    (None, Some((next_start, mut next_size))) => {
+                        let mut ent_next = ent.move_forward().expect("merge next");
+                        ops.op_remove(next_start, next_size);
+                        next_size += size;
+                        *ent_next.get_mut() = next_size;
+                        ent_next.alter_key(start).expect("merge next alter_key");
+                        ops.op_add(start, next_size);
+                    }
+                    (Some((prev_start, mut prev_size)), None) => {
+                        ops.op_remove(prev_start, prev_size);
+                        let mut ent_prev = ent.move_backward().expect("merge prev");
+                        prev_size += size;
+                        *ent_prev.get_mut() = prev_size;
+                        ops.op_add(prev_start, prev_size);
+                    }
+                    (Some((prev_start, prev_size)), Some((next_start, next_size))) => {
+                        ops.op_remove(prev_start, prev_size);
+                        ops.op_remove(next_start, next_size);
+                        let mut ent_prev = ent.move_backward().expect("merge prev");
+                        let final_size = prev_size + size + next_size;
+                        *ent_prev.get_mut() = final_size;
+                        ops.op_add(prev_start, final_size);
+                        let ent_next = ent_prev.move_forward().expect("merge next");
+                        ent_next.remove();
+                    }
+                }
+                self.space += size;
                 Ok(())
             }
         }
     }
 
     #[inline(always)]
-    pub fn add_abs(&mut self, start: T, end: T) {
+    pub fn add_abs(&mut self, start: T, end: T) -> Result<(), (T, T)> {
         assert!(start < end, "range tree add start={} end={}", start, end);
-        let _ = self.add(start, end - start);
+        self.add(start, end - start)
     }
 
     /// Add range which may have multiple intersections with existing range, ensuring union result
     #[inline]
-    pub fn add_and_merge(&mut self, start: T, size: T) {
+    pub fn add_loosely(&mut self, start: T, size: T) {
         assert!(size > T::zero(), "range tree add size error");
         let new_end = start + size;
-        let mut handled_by_recursion = false;
-
         let base_ent = match self.tree.entry(start) {
             Entry::Occupied(oe) => {
                 if start + *oe.get() >= new_end {
@@ -235,9 +198,8 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
             ($next_start: expr, $new_end: expr) => {
                 if let Some((last_start, last_size)) = self.tree.remove_range_with(
                     $next_start..=$new_end,
-                    |removed_start, removed_size| {
+                    |_removed_start, removed_size| {
                         self.space -= *removed_size;
-                        self.ops.op_remove(*removed_start, *removed_start + *removed_size);
                     },
                 ) {
                     let last_end = last_start + last_size;
@@ -246,7 +208,6 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                         // add back and join with previous range
                         self.add(new_end, _size)
                             .expect("add {new_end:?}:{_size:?} should not fail");
-                        handled_by_recursion = true;
                     }
                 }
             };
@@ -255,7 +216,6 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
             Entry::Occupied(mut oe) => {
                 let base_start = *oe.key();
                 let old_size = *oe.get();
-                self.ops.op_remove(base_start, base_start + old_size);
 
                 // extend the size to final size
                 let final_size = new_end - base_start;
@@ -269,21 +229,10 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                         drop(oe);
                         remove_intersect!(next_start, new_end);
                     } else if next_start == new_end {
-                        self.ops.op_remove(next_start, next_start + next_size);
                         // space is neutral (moving between segments)
                         *oe.get_mut() += next_size;
                         self.tree.remove(&next_start);
                     }
-                }
-
-                if !handled_by_recursion {
-                    let final_key = base_start;
-                    let final_size = if let Entry::Occupied(o) = self.tree.entry(final_key) {
-                        *o.get()
-                    } else {
-                        unreachable!()
-                    };
-                    self.ops.op_add(final_key, final_key + final_size);
                 }
             }
             Entry::Vacant(ve) => {
@@ -296,37 +245,117 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                     if next_start < new_end {
                         ve.insert(size);
                         remove_intersect!(next_start, new_end);
-                        if !handled_by_recursion {
-                            // TODO is it possible to remove and get next entry?
-                            if let Entry::Occupied(o) = self.tree.entry(base_start) {
-                                self.ops.op_add(base_start, base_start + *o.get());
-                            }
-                        }
                     } else if next_start == new_end {
                         let final_size = new_end - base_start + next_size;
-                        self.ops.op_remove(next_start, next_start + next_size);
                         ve.insert(final_size);
                         self.tree.remove(&next_start);
-                        self.ops.op_add(base_start, base_start + final_size);
                     } else {
                         ve.insert(size);
-                        self.ops.op_add(base_start, base_start + size);
                     }
                 } else {
                     ve.insert(size);
-                    self.ops.op_add(base_start, base_start + size);
                 }
             }
         }
     }
 
-    /// Remove all the intersection ranges in the tree (might span across multiple range)
+    /// Valid and remove specify range start:size
+    ///
+    /// # Return value
+    /// - Only return Ok(()) when there's existing range equal to or contain the removal range in the tree,
+    /// - return Err(None) when not found,
+    /// - return Err(Some(start, size)) when a range intersect with the removal range, or when the
+    ///   removal range larger than existing range.
+    #[inline]
+    pub fn remove(&mut self, start: T, size: T) -> Result<(), Option<(T, T)>> {
+        self.remove_with(start, size, &mut DummyOps {})
+    }
+
+    /// Valid and remove specify range start:size
+    ///
+    /// # Return value
+    ///
+    /// - Only return Ok(()) when there's existing range equal to or contain the removal range in the tree,
+    /// - return Err(None) when not found,
+    /// - return Err(Some(start, size)) when a range intersect with the removal range, or when the
+    ///   removal range larger than existing range.
+    pub fn remove_with<O>(&mut self, start: T, size: T, ops: &mut O) -> Result<(), Option<(T, T)>>
+    where
+        O: RangeTreeOps<T>,
+    {
+        let end = start + size;
+        let ent = self.tree.entry(start);
+        match ent {
+            Entry::Occupied(mut oent) => {
+                let rs_size = *oent.get();
+                ops.op_remove(start, rs_size);
+                if rs_size == size {
+                    // Exact match or subset removed
+                    oent.remove();
+                    self.space -= rs_size;
+                    return Ok(());
+                } else if rs_size > size {
+                    // Shrink from front
+                    let new_start = start + size;
+                    let new_size = rs_size - size;
+                    oent.alter_key(new_start).expect("shrink alter_key");
+                    *oent.get_mut() = new_size;
+                    ops.op_add(new_start, new_size);
+                    self.space -= size;
+                    return Ok(());
+                } else {
+                    // existing range smaller than what need to remove
+                    return Err(Some((start, rs_size)));
+                }
+            }
+            Entry::Vacant(vent) => {
+                if let Some((&rs_start, &rs_size)) = vent.peek_backward() {
+                    let rs_end = rs_start + rs_size;
+                    if rs_end > start {
+                        ops.op_remove(rs_start, rs_size);
+                        let mut oent = vent.move_backward().expect("move back to overlapping");
+                        if rs_end > end {
+                            let new_size = start - rs_start;
+                            // punch a hold in the middle
+                            *oent.get_mut() = new_size;
+                            ops.op_add(rs_start, new_size);
+                            let new_size2 = rs_end - end;
+                            // TODO optimize add insert after entry for btree
+                            self.tree.insert(end, new_size2);
+                            ops.op_add(end, new_size2);
+                            self.space -= size;
+                            return Ok(());
+                        } else if rs_end == end {
+                            // Shrink from back
+                            let new_size = start - rs_start;
+                            *oent.get_mut() = new_size;
+                            ops.op_add(rs_start, new_size);
+                            self.space -= rs_end - start;
+                            return Ok(());
+                        } else {
+                            return Err(Some((rs_start, rs_size)));
+                        }
+                    } else {
+                        return Err(None);
+                    }
+                } else {
+                    return Err(None);
+                }
+            }
+        }
+    }
+
+    /// Remove all the intersection ranges in the tree
+    ///
+    /// the range start:size to remove allow to be larger than the existing range
     ///
     /// Equals to remove_and_split in v0.1
     ///
-    /// return true if overlapping range found and removed
-    #[inline]
-    pub fn remove(&mut self, mut start: T, mut size: T) -> bool {
+    /// return true if overlapping range found and removed.
+    /// return false if overlapping range not found.
+    ///
+    /// #[inline]
+    pub fn remove_loosely(&mut self, mut start: T, mut size: T) -> bool {
         let end = start + size;
         let mut ent = self.tree.entry(start);
         let mut removed = false;
@@ -334,7 +363,6 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
             match ent {
                 Entry::Occupied(mut oent) => {
                     let rs_size = *oent.get();
-                    self.ops.op_remove(start, start + rs_size);
                     if rs_size == size {
                         // Exact match or subset removed
                         oent.remove();
@@ -346,7 +374,6 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                         let new_size = rs_size - size;
                         oent.alter_key(new_start).expect("shrink alter_key");
                         *oent.get_mut() = new_size;
-                        self.ops.op_add(new_start, new_start + new_size);
                         self.space -= size;
                         return true;
                     } else {
@@ -371,20 +398,19 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
                         let rs_end = rs_start + rs_size;
                         if rs_end > start {
                             let mut oent = vent.move_backward().expect("move back to overlapping");
-                            self.ops.op_remove(rs_start, rs_end);
                             if rs_end > end {
+                                let new_size = start - rs_start;
                                 // punch a hold in the middle
-                                *oent.get_mut() = start - rs_start;
+                                *oent.get_mut() = new_size;
+                                let new_size2 = rs_end - end;
                                 // TODO optimize add insert after entry for btree
-                                self.tree.insert(end, rs_end - end);
-                                self.ops.op_add(rs_start, start);
-                                self.ops.op_add(end, rs_end);
+                                self.tree.insert(end, new_size2);
                                 self.space -= size;
                                 return true;
                             } else {
                                 // Shrink from back
-                                *oent.get_mut() = start - rs_start;
-                                self.ops.op_add(rs_start, start);
+                                let new_size = start - rs_start;
+                                *oent.get_mut() = new_size;
                                 self.space -= rs_end - start;
                                 if rs_end == end {
                                     return true;
@@ -445,6 +471,15 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
         RangeIter { cursor, end: r.end_bound().cloned(), not_empty: true }
     }
 
+    pub fn collect(&self) -> Vec<(T, T)> {
+        let mut v = Vec::with_capacity(self.len());
+        for (start, size) in &self.tree {
+            v.push((*start, *size))
+        }
+        v
+    }
+
+    #[inline]
     pub fn iter(&self) -> Iter<'_, T, T> {
         self.tree.iter()
     }
@@ -454,7 +489,7 @@ impl<T: RangeTreeKey, O: RangeTreeOps<T>> RangeTreeCustom<T, O> {
     }
 }
 
-impl<'a, T: RangeTreeKey, O: RangeTreeOps<T>> IntoIterator for &'a RangeTreeCustom<T, O> {
+impl<'a, T: RangeTreeKey> IntoIterator for &'a RangeTree<T> {
     type Item = (&'a T, &'a T);
     type IntoIter = Iter<'a, T, T>;
 
@@ -464,7 +499,7 @@ impl<'a, T: RangeTreeKey, O: RangeTreeOps<T>> IntoIterator for &'a RangeTreeCust
     }
 }
 
-impl<T: RangeTreeKey, O: RangeTreeOps<T>> IntoIterator for RangeTreeCustom<T, O> {
+impl<T: RangeTreeKey> IntoIterator for RangeTree<T> {
     type Item = (T, T);
     type IntoIter = IntoIter<T, T>;
 
