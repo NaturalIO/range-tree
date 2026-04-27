@@ -74,7 +74,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
     }
 
     #[inline(always)]
-    pub fn get_count(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.tree.len()
     }
 
