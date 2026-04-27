@@ -1,15 +1,48 @@
 use captains_log::*;
+use embed_collections::btree::BTreeMap;
 use range_tree_rs::*;
 use rstest::rstest;
 
 mod common;
 use common::setup_log;
 
-fn range_tree_print<T: RangeTreeKey, O: RangeTreeOps<T>>(rt: &RangeTreeCustom<T, O>) {
-    for (&k, &v) in rt.iter() {
-        println!("[{}, {}]", k, k + v);
+// key is (size, offset)
+struct SizeTree(BTreeMap<(u64, u64), ()>);
+
+impl SizeTree {
+    fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
+    fn verify(&self, rt: &RangeTree<u64>) {
+        self.0.validate();
+        for (start, size) in rt {
+            assert!(self.0.contains_key(&(*size, *start)), "{start}:{size} not in size_tree");
+        }
+        for (size, start) in self.0.keys() {
+            assert_eq!(rt.range(*start..).next(), Some((*start, *size)));
+        }
+        assert_eq!(rt.len(), self.0.len());
     }
 }
+
+impl RangeTreeOps<u64> for SizeTree {
+    #[inline(always)]
+    fn op_add(&mut self, start: u64, size: u64) {
+        self.0.insert((size, start), ());
+    }
+
+    #[inline(always)]
+    fn op_remove(&mut self, start: u64, size: u64) {
+        self.0.remove(&(size, start));
+    }
+}
+
+//fn range_tree_print<T: RangeTreeKey>(rt: &RangeTree<T>) {
+//    for (&k, &v) in rt.iter() {
+//        println!("[{}, {}]", k, k + v);
+//    }
+//}
 
 #[logfn]
 #[rstest]
@@ -21,44 +54,50 @@ fn range_tree_size(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn range_tree_add(setup_log: ()) {
+    let mut size_tree = SizeTree::new();
     let mut rt = RangeTree::<u64>::new();
-    assert!(rt.find(0, 10).is_none());
     assert_eq!(0, rt.get_space());
 
     // 1. Initial add 0:2
-    rt.add(0, 2).unwrap();
+    rt.add_with(0, 2, &mut size_tree).unwrap();
     assert_eq!(2, rt.get_space());
-    assert_eq!(1, rt.get_count());
-    let rs = rt.find(0, 1);
-    assert!(rs.is_some());
-    assert_eq!((0, 2), rs.unwrap());
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 2)]);
+    assert_eq!(rt.add_with(1, 2, &mut size_tree), Err((0, 2)));
+    assert_eq!(rt.add_with(1, 3, &mut size_tree), Err((0, 2)));
+    size_tree.verify(&rt);
 
     // 2. Disconnected add 10:5
-    rt.add(10, 5).unwrap();
+    rt.add_with(10, 5, &mut size_tree).unwrap();
     assert_eq!(7, rt.get_space());
-    assert_eq!(2, rt.get_count());
-    assert_eq!(rt.find(11, 1).unwrap(), (10, 5));
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 2), (10, 5)]);
+    size_tree.verify(&rt);
 
     // 3. Right adjacency (merge with left segment 0:2)
     // Add: 2:3
-    rt.add(2, 3).unwrap();
+    rt.add_with(2, 3, &mut size_tree).unwrap();
     assert_eq!(10, rt.get_space());
-    assert_eq!(2, rt.get_count());
-    assert_eq!(rt.find(1, 4).unwrap(), (0, 5));
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 5), (10, 5)]);
+    size_tree.verify(&rt);
 
     // 4. Left adjacency (merge with right segment 10:5)
     // Add: 8:2
-    rt.add(8, 2).unwrap();
+    rt.add_with(8, 2, &mut size_tree).unwrap();
     assert_eq!(12, rt.get_space());
-    assert_eq!(2, rt.get_count());
-    assert_eq!(rt.find(9, 3).unwrap(), (8, 7));
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 5), (8, 7)]);
+    size_tree.verify(&rt);
+    assert_eq!(rt.add_with(9, 10, &mut size_tree), Err((8, 7)));
 
     // 5. Double adjacency (merge left 0:5 and right 8:7)
     // Add: 5:3
-    rt.add(5, 3).unwrap();
+    rt.add_with(5, 3, &mut size_tree).unwrap();
     assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
-    assert_eq!(rt.find(4, 8).unwrap(), (0, 15));
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 15)]);
+    size_tree.verify(&rt);
 
     // 6. Overlap errors
     // Existing: 0:15
@@ -71,8 +110,11 @@ fn range_tree_add(setup_log: ()) {
     // Complete containment
     assert_eq!(rt.add(2, 3), Err((0, 15)));
 
+    size_tree.verify(&rt);
+
     // Add another disconnected segment for edge bounds tests
-    rt.add(20, 5).unwrap(); // 20:5
+    rt.add_with(20, 5, &mut size_tree).unwrap(); // 20:5
+    assert_eq!(rt.collect(), vec![(0, 15), (20, 5)]);
     // Straddling left bound (overlaps start of 20:5)
     assert_eq!(rt.add(18, 5), Err((20, 5)));
     // Straddling right bound (overlaps end of 20:5)
@@ -80,6 +122,9 @@ fn range_tree_add(setup_log: ()) {
     // Overlapping multiple segments
     assert_eq!(rt.add(14, 8), Err((0, 15)));
 
+    assert_eq!(rt.collect(), vec![(0, 15), (20, 5)]);
+
+    size_tree.verify(&rt);
     rt.validate();
 }
 
@@ -87,89 +132,68 @@ fn range_tree_add(setup_log: ()) {
 #[rstest]
 fn range_tree_add_loosely(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
-    assert!(rt.find(0, 10).is_none());
     assert_eq!(0, rt.get_space());
 
     rt.add_loosely(0, 2);
     assert_eq!(2, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(0, 1);
-    assert!(rs.is_some());
-    assert_eq!((0, 2), rs.unwrap());
-
-    assert!(rt.find(0, 3).is_some());
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 2)]);
 
     // left join
     rt.add_loosely(2, 5);
     assert_eq!(7, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(0, 1);
-    assert!(rs.is_some());
-    assert_eq!((0, 7), rs.unwrap());
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7)]);
 
     // without join
     rt.add_loosely(15, 5);
     assert_eq!(12, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(16, 1);
-    assert!(rs.is_some());
-    assert_eq!((15, 5), rs.unwrap());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (15, 5)]);
 
     // right join
     rt.add_loosely(13, 2);
     assert_eq!(14, rt.get_space());
-    assert_eq!(2, rt.get_count());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (13, 7)]);
 
-    let rs = rt.find(16, 1);
-    assert!(rs.is_some());
-    assert_eq!((13, 7), rs.unwrap());
-
-    // duplicate
+    // left intersect
     rt.add_loosely(14, 8);
     assert_eq!(16, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(0, 1);
-    assert!(rs.is_some());
-    assert_eq!((0, 7), rs.unwrap());
-
-    let rs = rt.find(16, 1);
-    assert!(rs.is_some());
-    assert_eq!((13, 9), rs.unwrap());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (13, 9)]);
 
     // without join
     rt.add_loosely(25, 5);
     assert_eq!(21, rt.get_space());
-    assert_eq!(3, rt.get_count());
-
-    let rs = rt.find(26, 1);
-    assert!(rs.is_some());
-    assert_eq!((25, 5), rs.unwrap());
+    assert_eq!(3, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (13, 9), (25, 5)]);
 
     // duplicate
     rt.add_loosely(12, 20);
     assert_eq!(27, rt.get_space());
-    assert_eq!(2, rt.get_count());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (12, 20)]);
 
-    let rs = rt.find(0, 1);
-    assert!(rs.is_some());
-    assert_eq!((0, 7), rs.unwrap());
-
-    let rs = rt.find(16, 1);
-    assert!(rs.is_some());
-    assert_eq!((12, 20), rs.unwrap());
-
-    // left and right join
-    rt.add_loosely(7, 5);
+    // left and right intersect
+    rt.add_loosely(6, 7);
     assert_eq!(32, rt.get_space());
-    assert_eq!(1, rt.get_count());
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 32)]);
 
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((0, 32), rs.unwrap());
+    rt.add(50, 10).expect("ok");
+    assert_eq!(rt.collect(), vec![(0, 32), (50, 10)]);
+
+    // right intersect
+    rt.add_loosely(45, 10);
+    assert_eq!(rt.collect(), vec![(0, 32), (45, 15)]);
+    rt.add_loosely(70, 5);
+    rt.add_loosely(80, 5);
+    rt.add_loosely(90, 5);
+    rt.add_loosely(100, 5);
+    assert_eq!(rt.collect(), vec![(0, 32), (45, 15), (70, 5), (80, 5), (90, 5), (100, 5)]);
+    rt.add_loosely(65, 30);
+    assert_eq!(rt.collect(), vec![(0, 32), (45, 15), (65, 30), (100, 5)]);
 
     rt.validate();
 }
@@ -177,60 +201,56 @@ fn range_tree_add_loosely(setup_log: ()) {
 #[logfn]
 #[rstest]
 fn range_tree_remove(setup_log: ()) {
+    let mut size_tree = SizeTree::new();
     let mut rt = RangeTree::<u64>::new();
     // add [0, 15]
-    rt.add(0, 15).unwrap();
+    rt.add_with(0, 15, &mut size_tree).unwrap();
     assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 15)]);
 
-    // remove [7, 8] expect [0, 7] [8, 15]
-    rt.remove(7, 1);
+    // remove split
+    rt.remove_with(7, 1, &mut size_tree).expect("ok");
     assert_eq!(14, rt.get_space());
-    assert_eq!(2, rt.get_count());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (8, 7)]);
 
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((8, 7), rs.unwrap());
-    rt.validate();
-
-    // remove [12, 15] expect [0, 7] [8, 12]
-    rt.remove(12, 3);
+    // remove 8-15 shorten
+    rt.remove_with(12, 3, &mut size_tree).expect("ok");
     assert_eq!(11, rt.get_space());
-    assert_eq!(2, rt.get_count());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (8, 4)]);
 
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((8, 4), rs.unwrap());
-    rt.validate();
+    // remove not existing
+    assert_eq!(rt.remove_with(12, 3, &mut size_tree), Err(None));
+    assert_eq!(rt.remove_with(15, 3, &mut size_tree), Err(None));
+
+    // remove left intersect error 13 is over 8-12
+    assert_eq!(rt.remove_with(10, 3, &mut size_tree), Err(Some((8, 4))));
 
     // remove [2, 5] expect [0, 2] [5, 7] [8, 12]
-    rt.remove(2, 3);
+    rt.remove_with(2, 3, &mut size_tree).expect("ok");
     assert_eq!(8, rt.get_space());
-    assert_eq!(3, rt.get_count());
+    assert_eq!(3, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 2), (5, 2), (8, 4)]);
 
-    let rs = rt.find(5, 1);
-    assert!(rs.is_some());
-    assert_eq!((5, 2), rs.unwrap());
-    rt.validate();
+    // remove right intersect error, it does not detect the range at the right
+    assert_eq!(rt.remove_with(3, 5, &mut size_tree), Err(None));
 
     // remove [8, 10] expect [0, 2] [5, 7] [10, 12]
-    rt.remove(8, 2);
+    rt.remove_with(8, 2, &mut size_tree).expect("ok");
     assert_eq!(6, rt.get_space());
-    assert_eq!(3, rt.get_count());
-
-    let rs = rt.find(10, 1);
-    assert!(rs.is_some());
-    assert_eq!((10, 2), rs.unwrap());
-    rt.validate();
+    assert_eq!(3, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 2), (5, 2), (10, 2)]);
 
     // remove [0, 2] expect [5, 7] [10, 12]
-    rt.remove(0, 2);
+    rt.remove_with(0, 2, &mut size_tree).expect("ok");
     assert_eq!(4, rt.get_space());
-    assert_eq!(2, rt.get_count());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(5, 2), (10, 2)]);
 
-    let rs = rt.find(5, 1);
-    assert!(rs.is_some());
-    assert_eq!((5, 2), rs.unwrap());
+    size_tree.verify(&rt);
+
     rt.validate();
 }
 
@@ -249,7 +269,7 @@ fn range_tree_iter(setup_log: ()) {
         count += 1;
         total_space += size;
     }
-    assert_eq!(count, rt.get_count() as usize);
+    assert_eq!(count, rt.len() as usize);
     assert_eq!(total_space, rt.get_space());
     assert_eq!(4, count);
     assert_eq!(30, total_space);
@@ -265,268 +285,169 @@ fn range_tree_iter(setup_log: ()) {
         ranges_from_for.push((start, size));
     }
     assert_eq!(ranges_from_for, vec![(0, 2), (4, 4), (12, 8), (32, 16)]);
+
+    // Verify via range iterator
+    let rs: Vec<(u64, u64)> = rt.range(..).collect();
+    assert_eq!(rs, vec![(0, 2), (4, 4), (12, 8), (32, 16)]);
 }
 
 #[logfn]
 #[rstest]
-fn range_tree_find_overlap(setup_log: ()) {
-    let mut rt = RangeTree::<u64>::new();
-    rt.add_abs(2044, 2052);
-    rt.add_abs(4092, 4096);
-    rt.add_abs(516096, 516098);
-    rt.add_abs(518140, 518148);
-    rt.add_abs(520188, 520194);
-    rt.add_abs(522236, 522244);
-    rt.add_abs(524284, 524288);
-    rt.add_abs(66060288, 66060290);
-    rt.add_abs(66062332, 66062340);
-    rt.add_abs(66064380, 66064384);
-    let (rs_start, rs_size) = rt.find(0, 4096).unwrap();
-    assert_eq!(rs_start, 2044);
-    assert_eq!(rs_size, 8);
-    for i in &[4096, 516098, 518148, 520194, 522244, 524288, 66060290, 66062340, 66064384] {
-        let (rs_start, _) = rt.find(4000, *i).unwrap();
-        assert_eq!(rs_start, 4092);
-    }
-    range_tree_print(&rt);
-    let _space1 = rt.get_space();
-    assert!(rt.remove(0, 66064384));
-    range_tree_print(&rt);
-    assert_eq!(rt.get_space(), 0);
-}
-
-#[logfn]
-#[rstest]
-fn range_tree_find_overlap_simple(setup_log: ()) {
-    let mut rt = RangeTree::<u64>::new();
-    rt.add_abs(20, 80);
-    rt.add_abs(120, 180);
-    rt.add_abs(220, 280);
-    rt.add_abs(320, 380);
-    rt.add_abs(420, 480);
-    rt.add_abs(520, 580);
-    rt.add_abs(620, 680);
-    range_tree_print(&rt);
-    let (rs_start, rs_size) = rt.find(240, 340).unwrap();
-    assert_eq!(rs_start, 220);
-    assert_eq!(rs_size, 60);
-}
-
-#[logfn]
-#[rstest]
-fn range_tree_remove1(setup_log: ()) {
+fn range_tree_remove_loosely1(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [0, 15]
     rt.add(0, 15).unwrap();
     assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 15)]);
 
-    // remove [7, 10] expect [0, 7] [10, 15]
-    rt.remove(7, 3);
+    // punch hole
+    assert_eq!(rt.remove_loosely(7, 3), true);
     assert_eq!(12, rt.get_space());
-    assert_eq!(2, rt.get_count());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (10, 5)]);
 
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((10, 5), rs.unwrap());
-    rt.validate();
-
-    // remove right over [13, 18] expect [0, 7] [10, 13]
-    rt.remove(13, 5);
+    // remove 13-18 outside 10-15
+    assert_eq!(rt.remove_loosely(13, 5), true);
     assert_eq!(10, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((10, 3), rs.unwrap());
-    rt.validate();
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (10, 3)]);
 
     // remove nothing [9, 10] expect [0, 7] [10, 13]
-    assert!(!rt.remove(9, 1));
+    assert_eq!(rt.remove_loosely(9, 1), false);
     assert_eq!(10, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((10, 3), rs.unwrap());
-    rt.validate();
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 7), (10, 3)]);
 
     // remove left over [9, 11] expect [0, 7] [11, 13]
-    rt.remove(9, 2);
+    assert_eq!(rt.remove_loosely(9, 2), true);
     assert_eq!(9, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((11, 2), rs.unwrap());
-    rt.validate();
+    assert_eq!(2, rt.len());
+    let rs: Vec<(u64, u64)> = rt.range(..).collect();
+    assert_eq!(rs, vec![(0, 7), (11, 2)]);
 
     // remove [6, 12] expect [0, 6] [12, 13]
-    rt.remove(6, 6);
+    assert_eq!(rt.remove_loosely(6, 6), true);
     assert_eq!(7, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(0, 5);
-    assert!(rs.is_some());
-    assert_eq!((0, 6), rs.unwrap());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(0, 6), (12, 1)]);
+    rt.add(15, 1).expect("ok");
+    rt.add(17, 1).expect("ok");
+    rt.add(19, 1).expect("ok");
+    rt.add(21, 1).expect("ok");
+    assert_eq!(rt.collect(), vec![(0, 6), (12, 1), (15, 1), (17, 1), (19, 1), (21, 1)]);
+    assert_eq!(rt.remove_loosely(18, 6), true);
+    assert_eq!(rt.collect(), vec![(0, 6), (12, 1), (15, 1), (17, 1)]);
     rt.validate();
 }
 
 #[logfn]
 #[rstest]
-fn range_tree_remove2(setup_log: ()) {
+fn range_tree_remove_loosely2(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [1, 16]
     rt.add(1, 15).unwrap();
     assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((1, 15), rs.unwrap());
-    rt.validate();
-
-    // remove left over and right over [0, 20] expect []
-    rt.remove(0, 20);
-    assert_eq!(0, rt.get_space());
-    assert_eq!(0, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_none());
-    rt.validate();
-
-    // add [1, 16]
-    rt.add(1, 15).unwrap();
-    assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((1, 15), rs.unwrap());
-    rt.validate();
-}
-
-#[logfn]
-#[rstest]
-fn range_tree_remove3(setup_log: ()) {
-    let mut rt = RangeTree::<u64>::new();
-
-    // add [1, 16]
-    rt.add(1, 15).unwrap();
-    assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((1, 15), rs.unwrap());
-    rt.validate();
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(1, 15)]);
 
     // add [33, 48]
     rt.add(33, 15).unwrap();
     assert_eq!(30, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(40, 1);
-    assert!(rs.is_some());
-    assert_eq!((33, 15), rs.unwrap());
-    rt.validate();
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(1, 15), (33, 15)]);
 
     // add [49, 64]
     rt.add(49, 15).unwrap();
     assert_eq!(45, rt.get_space());
-    assert_eq!(3, rt.get_count());
-
-    let rs = rt.find(50, 1);
-    assert!(rs.is_some());
-    assert_eq!((49, 15), rs.unwrap());
-    rt.validate();
+    assert_eq!(3, rt.len());
+    assert_eq!(rt.collect(), vec![(1, 15), (33, 15), (49, 15)]);
 
     // remove left over and right over [6, 56] expect [1, 6] [56, 64]
-    rt.remove(6, 50);
+    assert_eq!(rt.remove_loosely(6, 50), true);
     assert_eq!(13, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(58, 1);
-    assert!(rs.is_some());
-    assert_eq!((56, 8), rs.unwrap());
-    rt.validate();
-
-    let rs = rt.find(3, 1);
-    assert!(rs.is_some());
-    assert_eq!((1, 5), rs.unwrap());
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(1, 5), (56, 8)]);
     rt.validate();
 }
 
 #[logfn]
 #[rstest]
-fn range_tree_remove4(setup_log: ()) {
+fn range_tree_remove_loosely3(setup_log: ()) {
     let mut rt = RangeTree::<u64>::new();
 
     // add [1, 16]
     rt.add(1, 15).unwrap();
     assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((1, 15), rs.unwrap());
-    rt.validate();
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(1, 15)]);
 
     // add [33, 48]
     rt.add(33, 15).unwrap();
     assert_eq!(30, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(40, 1);
-    assert!(rs.is_some());
-    assert_eq!((33, 15), rs.unwrap());
-    rt.validate();
-
-    // remove right over [6, 56] expect [1, 6]
-    rt.remove(6, 50);
-    assert_eq!(5, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(3, 1);
-    assert!(rs.is_some());
-    assert_eq!((1, 5), rs.unwrap());
-    rt.validate();
-}
-
-#[logfn]
-#[rstest]
-fn range_tree_remove5(setup_log: ()) {
-    let mut rt = RangeTree::<u64>::new();
-
-    // add [1, 16]
-    rt.add(1, 15).unwrap();
-    assert_eq!(15, rt.get_space());
-    assert_eq!(1, rt.get_count());
-
-    let rs = rt.find(11, 1);
-    assert!(rs.is_some());
-    assert_eq!((1, 15), rs.unwrap());
-    rt.validate();
-
-    // add [33, 48]
-    rt.add(33, 15).unwrap();
-    assert_eq!(30, rt.get_space());
-    assert_eq!(2, rt.get_count());
-
-    let rs = rt.find(40, 1);
-    assert!(rs.is_some());
-    assert_eq!((33, 15), rs.unwrap());
-    rt.validate();
+    assert_eq!(2, rt.len());
+    assert_eq!(rt.collect(), vec![(1, 15), (33, 15)]);
 
     // remove left over [0, 40] expect [40, 48]
-    rt.remove(0, 40);
+    assert_eq!(rt.remove_loosely(0, 40), true);
     assert_eq!(8, rt.get_space());
-    assert_eq!(1, rt.get_count());
+    assert_eq!(1, rt.len());
+    assert_eq!(rt.collect(), vec![(40, 8)]);
 
-    let rs = rt.find(42, 1);
-    assert!(rs.is_some());
-    assert_eq!((40, 8), rs.unwrap());
     rt.validate();
+}
+
+#[logfn]
+#[rstest]
+fn range_tree_find(setup_log: ()) {
+    let mut rt = RangeTree::<u64>::new();
+    rt.add_abs(2044, 2052).unwrap();
+    rt.add_abs(4092, 4096).unwrap();
+    rt.add_abs(516096, 516098).unwrap();
+    rt.add_abs(518140, 518148).unwrap();
+    rt.add_abs(520188, 520194).unwrap();
+    rt.add_abs(522236, 522244).unwrap();
+    rt.add_abs(524284, 524288).unwrap();
+    rt.add_abs(66060288, 66060290).unwrap();
+    rt.add_abs(66062332, 66062340).unwrap();
+    rt.add_abs(66064380, 66064384).unwrap();
+    let (rs_start, rs_size) = rt.range(0..4096).next().unwrap();
+    assert_eq!(rs_start, 2044);
+    assert_eq!(rs_size, 8);
+    for i in &[4096, 516098, 518148, 520194, 522244, 524288, 66060290, 66062340, 66064384] {
+        let find = rt.range(4000..*i).next().unwrap();
+        assert_eq!(find, (4092, 4));
+    }
+    assert_eq!(
+        rt.range(4093..).collect::<Vec<(u64, u64)>>(),
+        vec![
+            (4092, 4),
+            (516096, 2),
+            (518140, 8),
+            (520188, 6),
+            (522236, 8),
+            (524284, 4),
+            (66060288, 2),
+            (66062332, 8),
+            (66064380, 4)
+        ]
+    );
+    assert_eq!(rt.range(4093..518140).collect::<Vec<(u64, u64)>>(), vec![(4092, 4), (516096, 2),]);
+    assert_eq!(
+        rt.range(4091..=518140).collect::<Vec<(u64, u64)>>(),
+        vec![(4092, 4), (516096, 2), (518140, 8),]
+    );
+    assert_eq!(
+        rt.range(..=518140).collect::<Vec<(u64, u64)>>(),
+        vec![(2044, 8), (4092, 4), (516096, 2), (518140, 8),]
+    );
+    assert_eq!(
+        rt.range(2044..=518140).collect::<Vec<(u64, u64)>>(),
+        vec![(2044, 8), (4092, 4), (516096, 2), (518140, 8),]
+    );
+    let _space1 = rt.get_space();
+    assert!(rt.remove_loosely(0, 66064384));
+    assert_eq!(rt.get_space(), 0);
 }
