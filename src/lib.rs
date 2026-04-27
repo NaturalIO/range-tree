@@ -487,6 +487,11 @@ impl<T: RangeTreeKey> RangeTree<T> {
     pub fn validate(&self) {
         self.tree.validate();
     }
+
+    #[inline]
+    pub fn memory_used(&self) -> usize {
+        self.tree.memory_used()
+    }
 }
 
 impl<'a, T: RangeTreeKey> IntoIterator for &'a RangeTree<T> {
