@@ -99,9 +99,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
         let mut prev = None;
         let mut next = None;
         match self.tree.entry(start) {
-            Entry::Occupied(ent) => {
-                return Err((*ent.key(), *ent.get()));
-            }
+            Entry::Occupied(ent) => Err((*ent.key(), *ent.get())),
             Entry::Vacant(ent) => {
                 if let Some((_start, _size)) = ent.peek_backward() {
                     let _end = *_start + *_size;
@@ -226,7 +224,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
                     let next_start = *_next_start;
                     let next_size = *_next_size;
                     if next_start < new_end {
-                        drop(oe);
+                        _ = oe;
                         remove_intersect!(next_start, new_end);
                     } else if next_start == new_end {
                         // space is neutral (moving between segments)
@@ -293,7 +291,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
                     // Exact match or subset removed
                     oent.remove();
                     self.space -= rs_size;
-                    return Ok(());
+                    Ok(())
                 } else if rs_size > size {
                     // Shrink from front
                     let new_start = start + size;
@@ -302,10 +300,10 @@ impl<T: RangeTreeKey> RangeTree<T> {
                     *oent.get_mut() = new_size;
                     ops.op_add(new_start, new_size);
                     self.space -= size;
-                    return Ok(());
+                    Ok(())
                 } else {
                     // existing range smaller than what need to remove
-                    return Err(Some((start, rs_size)));
+                    Err(Some((start, rs_size)))
                 }
             }
             Entry::Vacant(vent) => {
@@ -324,22 +322,22 @@ impl<T: RangeTreeKey> RangeTree<T> {
                             self.tree.insert(end, new_size2);
                             ops.op_add(end, new_size2);
                             self.space -= size;
-                            return Ok(());
+                            Ok(())
                         } else if rs_end == end {
                             // Shrink from back
                             let new_size = start - rs_start;
                             *oent.get_mut() = new_size;
                             ops.op_add(rs_start, new_size);
                             self.space -= rs_end - start;
-                            return Ok(());
+                            Ok(())
                         } else {
-                            return Err(Some((rs_start, rs_size)));
+                            Err(Some((rs_start, rs_size)))
                         }
                     } else {
-                        return Err(None);
+                        Err(None)
                     }
                 } else {
-                    return Err(None);
+                    Err(None)
                 }
             }
         }
@@ -377,16 +375,16 @@ impl<T: RangeTreeKey> RangeTree<T> {
                         self.space -= size;
                         return true;
                     } else {
-                        if let Some((_next_start, _next_size)) = oent.peek_forward() {
-                            if *_next_start < end {
-                                start = *_next_start;
-                                size = end - start;
-                                self.space -= *oent.get();
-                                oent.remove();
-                                ent = self.tree.entry(start);
-                                removed = true;
-                                continue;
-                            }
+                        if let Some((_next_start, _next_size)) = oent.peek_forward()
+                            && *_next_start < end
+                        {
+                            start = *_next_start;
+                            size = end - start;
+                            self.space -= *oent.get();
+                            oent.remove();
+                            ent = self.tree.entry(start);
+                            removed = true;
+                            continue;
                         }
                         self.space -= rs_size;
                         oent.remove();
@@ -415,31 +413,30 @@ impl<T: RangeTreeKey> RangeTree<T> {
                                 if rs_end == end {
                                     return true;
                                 }
-                                if let Some((next_start, _)) = oent.peek_forward() {
-                                    if *next_start < end {
-                                        start = *next_start;
-                                        size = end - *next_start;
-                                        ent = Entry::Occupied(
-                                            oent.move_forward()
-                                                .expect("move forward to overlapping"),
-                                        );
-                                        continue;
-                                    }
+                                if let Some((next_start, _)) = oent.peek_forward()
+                                    && *next_start < end
+                                {
+                                    start = *next_start;
+                                    size = end - *next_start;
+                                    ent = Entry::Occupied(
+                                        oent.move_forward().expect("move forward to overlapping"),
+                                    );
+                                    continue;
                                 }
                                 return true;
                             }
                         }
                     }
                     // Handle the case where range starts before the first overlapping segment
-                    if let Some((next_start, _)) = vent.peek_forward() {
-                        if *next_start < end {
-                            start = *next_start;
-                            size = end - *next_start;
-                            ent = Entry::Occupied(
-                                vent.move_forward().expect("move forward to overlapping"),
-                            );
-                            continue;
-                        }
+                    if let Some((next_start, _)) = vent.peek_forward()
+                        && *next_start < end
+                    {
+                        start = *next_start;
+                        size = end - *next_start;
+                        ent = Entry::Occupied(
+                            vent.move_forward().expect("move forward to overlapping"),
+                        );
+                        continue;
                     }
                     return removed;
                 }
@@ -547,6 +544,6 @@ impl<'a, T: RangeTreeKey> Iterator for RangeIter<'a, T> {
             }
             self.not_empty = false;
         }
-        return None;
+        None
     }
 }
