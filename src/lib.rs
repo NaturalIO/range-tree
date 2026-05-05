@@ -47,8 +47,7 @@ pub trait RangeTreeOps<T: RangeTreeKey> {
     fn op_remove(&mut self, start: T, size: T);
 }
 
-#[derive(Default)]
-pub struct DummyOps();
+struct DummyOps();
 
 impl<T: RangeTreeKey> RangeTreeOps<T> for DummyOps {
     #[inline]
