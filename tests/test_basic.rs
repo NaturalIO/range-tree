@@ -17,7 +17,7 @@ impl SizeTree {
     fn verify(&self, rt: &RangeTree<u64>) {
         self.0.validate();
         for (start, size) in rt {
-            assert!(self.0.contains_key(&(*size, *start)), "{start}:{size} not in size_tree");
+            assert!(self.0.contains_key(&(size, start)), "{start}:{size} not in size_tree");
         }
         for (size, start) in self.0.keys() {
             assert_eq!(rt.range(*start..).next(), Some((*start, *size)));
@@ -265,7 +265,7 @@ fn range_tree_iter(setup_log: ()) {
 
     let mut count = 0;
     let mut total_space = 0;
-    for (&_start, &size) in rt.iter() {
+    for (_start, size) in rt.iter() {
         count += 1;
         total_space += size;
     }
@@ -275,13 +275,12 @@ fn range_tree_iter(setup_log: ()) {
     assert_eq!(30, total_space);
 
     // Test IntoIterator
-    let ranges_from_into_iter: Vec<(u64, u64)> =
-        (&rt).into_iter().map(|(&start, &size)| (start, size)).collect();
+    let ranges_from_into_iter: Vec<(u64, u64)> = (&rt).into_iter().collect();
     assert_eq!(ranges_from_into_iter, vec![(0, 2), (4, 4), (12, 8), (32, 16)]);
 
     // Test for loop on reference
     let mut ranges_from_for: Vec<(u64, u64)> = Vec::new();
-    for (&start, &size) in &rt {
+    for (start, size) in &rt {
         ranges_from_for.push((start, size));
     }
     assert_eq!(ranges_from_for, vec![(0, 2), (4, 4), (12, 8), (32, 16)]);

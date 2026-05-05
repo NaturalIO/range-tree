@@ -8,13 +8,8 @@ use core::{
     fmt,
     ops::{AddAssign, Bound, RangeBounds, SubAssign},
 };
-use embed_collections::btree::{BTreeMap, Cursor, Entry};
+use embed_collections::btree::{BTreeMap, Cursor, Entry, IntoIter as _IntoIter, Iter as _Iter};
 use num_traits::*;
-
-/// consuming iterator of RangeTree
-pub use embed_collections::btree::IntoIter;
-/// Iterator of RangeTree (without bound)
-pub use embed_collections::btree::Iter;
 
 pub trait RangeTreeKey:
     Unsigned + AddAssign + SubAssign + Ord + Copy + fmt::Debug + fmt::Display + Default + 'static
@@ -454,7 +449,11 @@ impl<T: RangeTreeKey> RangeTree<T> {
         }
     }
 
-    /// return only when segment overlaps with [start, start+size)
+    /// return only when segment overlaps with start..end
+    ///
+    /// # NOTE
+    ///
+    /// Be aware the first range may have `_start < start`, and the last range may have `_start + _size > end`
     #[inline]
     pub fn range<'a, R: RangeBounds<T>>(&'a self, r: R) -> RangeIter<'a, T> {
         let start = match r.start_bound() {
@@ -487,8 +486,8 @@ impl<T: RangeTreeKey> RangeTree<T> {
     }
 
     #[inline]
-    pub fn iter(&self) -> Iter<'_, T, T> {
-        self.tree.iter()
+    pub fn iter(&self) -> Iter<'_, T> {
+        Iter(self.tree.iter())
     }
 
     pub fn validate(&self) {
@@ -502,8 +501,8 @@ impl<T: RangeTreeKey> RangeTree<T> {
 }
 
 impl<'a, T: RangeTreeKey> IntoIterator for &'a RangeTree<T> {
-    type Item = (&'a T, &'a T);
-    type IntoIter = Iter<'a, T, T>;
+    type Item = (T, T);
+    type IntoIter = Iter<'a, T>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -513,15 +512,39 @@ impl<'a, T: RangeTreeKey> IntoIterator for &'a RangeTree<T> {
 
 impl<T: RangeTreeKey> IntoIterator for RangeTree<T> {
     type Item = (T, T);
-    type IntoIter = IntoIter<T, T>;
+    type IntoIter = IntoIter<T>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        self.tree.into_iter()
+        IntoIter(self.tree.into_iter())
     }
 }
 
-/// An iterator with bound, acquire from [RangeTree::range()]
+/// An iterator without bound, acquire from [RangeTree::iter()]
+pub struct Iter<'a, T: RangeTreeKey>(_Iter<'a, T, T>);
+
+impl<'a, T: RangeTreeKey> Iterator for Iter<'a, T> {
+    type Item = (T, T);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(start, size)| (*start, *size))
+    }
+}
+
+/// An consuming iterator for RangeTree
+pub struct IntoIter<T: RangeTreeKey>(_IntoIter<T, T>);
+
+impl<T: RangeTreeKey> Iterator for IntoIter<T> {
+    type Item = (T, T);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+/// An iterator for RangeTree with bound, acquire from [RangeTree::range()]
 pub struct RangeIter<'a, T: RangeTreeKey> {
     cursor: Cursor<'a, T, T>,
     end: Bound<T>,
