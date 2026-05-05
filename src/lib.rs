@@ -34,8 +34,8 @@ impl<T> RangeTreeKey for T where
 {
 }
 
+/// A b+tree stores range segment of [start, start+size)
 pub struct RangeTree<T: RangeTreeKey> {
-    // the tree stores ranges in [key:start, value:size) format
     tree: BTreeMap<T, T>,
     space: T,
 }
@@ -159,6 +159,12 @@ impl<T: RangeTreeKey> RangeTree<T> {
         }
     }
 
+    /// Add to the tree with [start, end)
+    ///
+    /// Returns `Ok(())` if there are no intersection;
+    /// otherwise returns the overlapping range as `Err((existing_start, existing_size))`.
+    ///
+    /// This equals to add_abs in v0.1
     #[inline(always)]
     pub fn add_abs(&mut self, start: T, end: T) -> Result<(), (T, T)> {
         assert!(start < end, "range tree add start={} end={}", start, end);
@@ -166,6 +172,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
     }
 
     /// Add range which may have multiple intersections with existing range, ensuring union result
+    /// stores in the tree
     #[inline]
     pub fn add_loosely(&mut self, start: T, size: T) {
         assert!(size > T::zero(), "range tree add size error");
@@ -347,7 +354,8 @@ impl<T: RangeTreeKey> RangeTree<T> {
 
     /// Remove all the intersection ranges in the tree
     ///
-    /// the range start:size to remove allow to be larger than the existing range
+    /// Unlike the strict behavior of [RangeTree::remove()],
+    /// this function allows the removal range start:size to to be larger than the existing range.
     ///
     /// Equals to remove_and_split in v0.1
     ///
@@ -446,7 +454,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
         }
     }
 
-    /// return only when segment overlaps with [start, start+size]
+    /// return only when segment overlaps with [start, start+size)
     #[inline]
     pub fn range<'a, R: RangeBounds<T>>(&'a self, r: R) -> RangeIter<'a, T> {
         let start = match r.start_bound() {
