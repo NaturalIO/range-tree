@@ -8,10 +8,13 @@ use core::{
     fmt,
     ops::{AddAssign, Bound, RangeBounds, SubAssign},
 };
-use embed_collections::btree::{BTreeMap, Entry};
+use embed_collections::btree::{BTreeMap, Cursor, Entry};
 use num_traits::*;
 
-pub use embed_collections::btree::{Cursor, IntoIter, Iter};
+/// consuming iterator of RangeTree
+pub use embed_collections::btree::IntoIter;
+/// Iterator of RangeTree (without bound)
+pub use embed_collections::btree::Iter;
 
 pub trait RangeTreeKey:
     Unsigned + AddAssign + SubAssign + Ord + Copy + fmt::Debug + fmt::Display + Default + 'static
@@ -510,6 +513,7 @@ impl<T: RangeTreeKey> IntoIterator for RangeTree<T> {
     }
 }
 
+/// An iterator with bound, acquire from [RangeTree::range()]
 pub struct RangeIter<'a, T: RangeTreeKey> {
     cursor: Cursor<'a, T, T>,
     end: Bound<T>,
