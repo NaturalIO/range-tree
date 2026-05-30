@@ -1,7 +1,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, allow(unused_attributes))]
-
-//! This crate provides a range-tree implementation, intended to manage range section with btree.
+//! This crate provides a range-tree implementation, automatically merge and split range section.
+//!
+//! The usage scenario for persistent slab allocators (Similar to the range-tree in ZFS),
+//! while the underlayer is not avl, but [b+tree](https://docs.rs/embed-collections/latest/embed_collections/#btree),
+//! which has more friendly for CPU cache and smaller in memory usage.
 
 use core::{
     cmp::Ordering,
@@ -77,8 +80,12 @@ impl<T: RangeTreeKey> RangeTree<T> {
 
     /// Add range segment, merge with adjacent ranges, assuming no intersections.
     ///
-    /// Returns `Ok(())` if there are no intersection;
-    /// otherwise returns the overlapping range as `Err((existing_start, existing_size))`.
+    /// # Return value
+    ///
+    /// - `Ok(())` if there are no intersection;
+    /// - otherwise returns the overlapping range as `Err((existing_start, existing_size))`.
+    ///
+    /// # Compatibility
     ///
     /// This equals to add + add_find_overlap in v0.1
     #[inline]
@@ -86,6 +93,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
         self.add_with(start, size, &mut DummyOps {})
     }
 
+    /// The same with [add()](Self::add), with additional mirror operation to `RangeTreeOps`
     #[inline]
     pub fn add_with<O>(&mut self, start: T, size: T, ops: &mut O) -> Result<(), (T, T)>
     where
@@ -156,10 +164,10 @@ impl<T: RangeTreeKey> RangeTree<T> {
 
     /// Add to the tree with [start, end)
     ///
-    /// Returns `Ok(())` if there are no intersection;
-    /// otherwise returns the overlapping range as `Err((existing_start, existing_size))`.
+    /// # Return value
     ///
-    /// This equals to add_abs in v0.1
+    /// - `Ok(())` if there are no intersection;
+    /// - otherwise returns the overlapping range as `Err((existing_start, existing_size))`.
     #[inline(always)]
     pub fn add_abs(&mut self, start: T, end: T) -> Result<(), (T, T)> {
         assert!(start < end, "range tree add start={} end={}", start, end);
@@ -264,6 +272,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
     /// Valid and remove specify range start:size
     ///
     /// # Return value
+    ///
     /// - Only return Ok(()) when there's existing range equal to or contain the removal range in the tree,
     /// - return Err(None) when not found,
     /// - return Err(Some(start, size)) when a range intersect with the removal range, or when the
@@ -273,14 +282,8 @@ impl<T: RangeTreeKey> RangeTree<T> {
         self.remove_with(start, size, &mut DummyOps {})
     }
 
-    /// Valid and remove specify range start:size
-    ///
-    /// # Return value
-    ///
-    /// - Only return Ok(()) when there's existing range equal to or contain the removal range in the tree,
-    /// - return Err(None) when not found,
-    /// - return Err(Some(start, size)) when a range intersect with the removal range, or when the
-    ///   removal range larger than existing range.
+    /// The same with [remove()](Self::remove), with additional mirror operation to `RangeTreeOps`
+    #[inline]
     pub fn remove_with<O>(&mut self, start: T, size: T, ops: &mut O) -> Result<(), Option<(T, T)>>
     where
         O: RangeTreeOps<T>,
@@ -352,12 +355,15 @@ impl<T: RangeTreeKey> RangeTree<T> {
     /// Unlike the strict behavior of [RangeTree::remove()],
     /// this function allows the removal range start:size to to be larger than the existing range.
     ///
-    /// Equals to remove_and_split in v0.1
+    /// # Return value
     ///
     /// return true if overlapping range found and removed.
     /// return false if overlapping range not found.
     ///
-    /// #[inline]
+    /// # Compatibility
+    ///
+    /// Equals to remove_and_split in v0.1
+    #[inline]
     pub fn remove_loosely(&mut self, mut start: T, mut size: T) -> bool {
         let end = start + size;
         let mut ent = self.tree.entry(start);
