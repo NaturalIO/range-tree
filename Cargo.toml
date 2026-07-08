@@ -1,6 +1,6 @@
 [package]
 name = "range-tree-rs"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A range tree implement for slab allocator"
@@ -9,7 +9,7 @@ categories = ["data-structures", "no-std"]
 homepage = "https://github.com/NaturalIO/range_tree"
 
 [dependencies]
-embed-collections = {version=">=0.8", features=["btree"], default-features=false}
+embed-btree = "^0.1"
 num-traits = "0.2"
 log = { version="0", optional=true}
 
@@ -23,7 +23,7 @@ rstest = "0"
 default = ["std"]
 std = []
 # enable log for dev
-trace_log = ["dep:log", "embed-collections/trace_log"]
+trace_log = ["dep:log", "embed-btree/trace_log"]
 
 [package.metadata.docs.rs]
 all-features = true

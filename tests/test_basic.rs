@@ -1,5 +1,5 @@
 use captains_log::*;
-use embed_collections::btree::BTreeMap;
+use embed_btree::BTreeMap;
 use range_tree_rs::*;
 use rstest::rstest;
 

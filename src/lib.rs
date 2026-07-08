@@ -11,7 +11,7 @@ use core::{
     fmt,
     ops::{AddAssign, Bound, RangeBounds, SubAssign},
 };
-use embed_collections::btree::{BTreeMap, Cursor, Entry, IntoIter as _IntoIter, Iter as _Iter};
+use embed_btree::btree::{BTreeMap, Cursor, Entry, IntoIter as _IntoIter, Iter as _Iter};
 use num_traits::*;
 
 pub trait RangeTreeKey:
