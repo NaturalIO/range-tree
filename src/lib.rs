@@ -78,6 +78,22 @@ impl<T: RangeTreeKey> RangeTree<T> {
         self.tree.len()
     }
 
+    /// Load discrete range segment
+    ///
+    /// # Safety
+    ///
+    /// You should ganrantee the range never adjacent or overlaps
+    pub unsafe fn load_unchecked(&mut self, start: T, size: T) -> Result<(), (T, T)> {
+        match self.tree.entry(start) {
+            Entry::Vacant(ent) => {
+                ent.insert(size);
+                self.space += size;
+                Ok(())
+            }
+            Entry::Occupied(_ent) => Err((start, size)),
+        }
+    }
+
     /// Add range segment, merge with adjacent ranges, assuming no intersections.
     ///
     /// # Return value
