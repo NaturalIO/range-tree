@@ -104,7 +104,6 @@ impl<T: RangeTreeKey> RangeTree<T> {
         let mut prev = None;
         let mut next = None;
         match self.tree.entry(start) {
-            Entry::Occupied(ent) => Err((*ent.key(), *ent.get())),
             Entry::Vacant(ent) => {
                 if let Some((_start, _size)) = ent.peek_backward() {
                     let _end = *_start + *_size;
@@ -159,6 +158,7 @@ impl<T: RangeTreeKey> RangeTree<T> {
                 self.space += size;
                 Ok(())
             }
+            Entry::Occupied(ent) => Err((*ent.key(), *ent.get())),
         }
     }
 
@@ -181,14 +181,9 @@ impl<T: RangeTreeKey> RangeTree<T> {
         assert!(size > T::zero(), "range tree add size error");
         let new_end = start + size;
         let base_ent = match self.tree.entry(start) {
-            Entry::Occupied(oe) => {
-                if start + *oe.get() >= new_end {
-                    return;
-                }
-                Entry::Occupied(oe)
-            }
-            Entry::Vacant(ve) => {
-                if let Some((pre_start, pre_size)) = ve.peek_backward() {
+            Entry::Vacant(ve) => match ve.peek_backward() {
+                None => Entry::Vacant(ve),
+                Some((pre_start, pre_size)) => {
                     let cur_end = *pre_start + *pre_size;
                     if cur_end >= new_end {
                         return;
@@ -198,9 +193,13 @@ impl<T: RangeTreeKey> RangeTree<T> {
                     } else {
                         Entry::Vacant(ve)
                     }
-                } else {
-                    Entry::Vacant(ve)
                 }
+            },
+            Entry::Occupied(oe) => {
+                if start + *oe.get() >= new_end {
+                    return;
+                }
+                Entry::Occupied(oe)
             }
         };
 
@@ -248,22 +247,24 @@ impl<T: RangeTreeKey> RangeTree<T> {
             Entry::Vacant(ve) => {
                 let base_start = start;
                 self.space += size;
-
-                if let Some((_next_start, _next_size)) = ve.peek_forward() {
-                    let next_start = *_next_start;
-                    let next_size = *_next_size;
-                    if next_start < new_end {
-                        ve.insert(size);
-                        remove_intersect!(next_start, new_end);
-                    } else if next_start == new_end {
-                        let final_size = new_end - base_start + next_size;
-                        ve.insert(final_size);
-                        self.tree.remove(&next_start);
-                    } else {
+                match ve.peek_forward() {
+                    None => {
                         ve.insert(size);
                     }
-                } else {
-                    ve.insert(size);
+                    Some((_next_start, _next_size)) => {
+                        let next_start = *_next_start;
+                        let next_size = *_next_size;
+                        if next_start < new_end {
+                            ve.insert(size);
+                            remove_intersect!(next_start, new_end);
+                        } else if next_start == new_end {
+                            let final_size = new_end - base_start + next_size;
+                            ve.insert(final_size);
+                            self.tree.remove(&next_start);
+                        } else {
+                            ve.insert(size);
+                        }
+                    }
                 }
             }
         }
