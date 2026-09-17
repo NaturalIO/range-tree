@@ -117,62 +117,67 @@ impl<T: RangeTreeKey> RangeTree<T> {
     {
         assert!(size > T::zero(), "range tree add size={} error", size);
         let end = start + size;
-        let mut prev = None;
-        let mut next = None;
         match self.tree.entry(start) {
             Entry::Vacant(ent) => {
-                if let Some((_start, _size)) = ent.peek_backward() {
-                    let _end = *_start + *_size;
-                    match _end.cmp(&start) {
+                if let Some((_prev_start, _prev_size)) = ent.peek_backward() {
+                    let prev_end = *_prev_start + *_prev_size;
+                    match prev_end.cmp(&start) {
+                        Ordering::Less => {}
                         Ordering::Equal => {
-                            prev = Some((*_start, *_size));
+                            if let Some((_next_start, _next_size)) = ent.peek_forward() {
+                                match end.cmp(_next_start) {
+                                    Ordering::Less => {} // cannot merge
+                                    Ordering::Equal => {
+                                        // merge with prev and next
+                                        ops.op_remove(*_prev_start, *_prev_size);
+                                        ops.op_remove(*_next_start, *_next_size);
+                                        let new_size = *_prev_size + size + *_next_size;
+                                        ops.op_add(*_prev_start, new_size);
+                                        let mut ent_prev = ent.move_backward().expect("merge prev");
+                                        *ent_prev.get_mut() = new_size;
+                                        self.space += size;
+                                        let ent_next = ent_prev.move_forward().expect("merge next");
+                                        ent_next.remove();
+                                        return Ok(());
+                                    }
+                                    Ordering::Greater => return Err((*_next_start, *_next_size)),
+                                }
+                            }
+
+                            // merge with previous
+                            let prev_start = *_prev_start;
+                            ops.op_remove(prev_start, *_prev_size);
+                            let new_size = *_prev_size + size;
+                            ops.op_add(*_prev_start, new_size);
+                            let mut ent_prev = ent.move_backward().expect("merge prev");
+                            *ent_prev.get_mut() = new_size;
+                            self.space += size;
+                            return Ok(());
                         }
-                        Ordering::Greater => return Err((*_start, *_size)),
-                        _ => {}
+                        Ordering::Greater => return Err((*_prev_start, *_prev_size)),
                     }
                 }
-                if let Some((_start, _size)) = ent.peek_forward() {
-                    match end.cmp(_start) {
+                if let Some((_next_start, _next_size)) = ent.peek_forward() {
+                    match end.cmp(_next_start) {
+                        Ordering::Less => {}
                         Ordering::Equal => {
-                            next = Some((*_start, *_size));
+                            // merge with next
+                            let mut ent_next = ent.move_forward().expect("merge next");
+                            ops.op_remove(*_next_start, *_next_size);
+                            let new_size = size + *_next_size;
+                            *ent_next.get_mut() = new_size;
+                            ent_next.alter_key(start).expect("merge next alter_key");
+                            ops.op_add(start, new_size);
+                            self.space += size;
+                            return Ok(());
                         }
-                        Ordering::Greater => return Err((*_start, *_size)),
-                        _ => {}
+                        Ordering::Greater => return Err((*_next_start, *_next_size)),
                     }
                 }
-                match (prev, next) {
-                    (None, None) => {
-                        ops.op_add(start, size);
-                        ent.insert(size);
-                    }
-                    (None, Some((next_start, mut next_size))) => {
-                        let mut ent_next = ent.move_forward().expect("merge next");
-                        ops.op_remove(next_start, next_size);
-                        next_size += size;
-                        *ent_next.get_mut() = next_size;
-                        ent_next.alter_key(start).expect("merge next alter_key");
-                        ops.op_add(start, next_size);
-                    }
-                    (Some((prev_start, mut prev_size)), None) => {
-                        ops.op_remove(prev_start, prev_size);
-                        let mut ent_prev = ent.move_backward().expect("merge prev");
-                        prev_size += size;
-                        *ent_prev.get_mut() = prev_size;
-                        ops.op_add(prev_start, prev_size);
-                    }
-                    (Some((prev_start, prev_size)), Some((next_start, next_size))) => {
-                        ops.op_remove(prev_start, prev_size);
-                        ops.op_remove(next_start, next_size);
-                        let mut ent_prev = ent.move_backward().expect("merge prev");
-                        let final_size = prev_size + size + next_size;
-                        *ent_prev.get_mut() = final_size;
-                        ops.op_add(prev_start, final_size);
-                        let ent_next = ent_prev.move_forward().expect("merge next");
-                        ent_next.remove();
-                    }
-                }
+                ops.op_add(start, size);
+                ent.insert(size);
                 self.space += size;
-                Ok(())
+                return Ok(());
             }
             Entry::Occupied(ent) => Err((*ent.key(), *ent.get())),
         }
