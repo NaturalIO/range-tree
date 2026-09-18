@@ -124,12 +124,14 @@ impl<T: RangeTreeKey> RangeTree<T> {
                     match prev_end.cmp(&start) {
                         Ordering::Less => {}
                         Ordering::Equal => {
+                            // merge with previous
+                            let prev_start = *_prev_start;
+                            ops.op_remove(prev_start, *_prev_size);
                             if let Some((_next_start, _next_size)) = ent.peek_forward() {
                                 match end.cmp(_next_start) {
                                     Ordering::Less => {} // cannot merge
                                     Ordering::Equal => {
                                         // merge with prev and next
-                                        ops.op_remove(*_prev_start, *_prev_size);
                                         ops.op_remove(*_next_start, *_next_size);
                                         let new_size = *_prev_size + size + *_next_size;
                                         ops.op_add(*_prev_start, new_size);
@@ -143,10 +145,6 @@ impl<T: RangeTreeKey> RangeTree<T> {
                                     Ordering::Greater => return Err((*_next_start, *_next_size)),
                                 }
                             }
-
-                            // merge with previous
-                            let prev_start = *_prev_start;
-                            ops.op_remove(prev_start, *_prev_size);
                             let new_size = *_prev_size + size;
                             ops.op_add(*_prev_start, new_size);
                             let mut ent_prev = ent.move_backward().expect("merge prev");
