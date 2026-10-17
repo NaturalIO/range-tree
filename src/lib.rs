@@ -202,93 +202,99 @@ impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
     pub fn add_loosely(&mut self, start: T, size: T) {
         assert!(size > T::zero(), "range tree add size error");
         let new_end = start + size;
-        let base_ent = match self.tree.entry(start) {
-            Entry::Vacant(ve) => match ve.peek_backward() {
-                None => Entry::Vacant(ve),
-                Some((pre_start, pre_size)) => {
-                    let cur_end = *pre_start + *pre_size;
-                    if cur_end >= new_end {
+        let next_start: T;
+        {
+            let base_ent = match self.tree.entry(start) {
+                Entry::Vacant(ve) => match ve.peek_backward() {
+                    None => Entry::Vacant(ve),
+                    Some((pre_start, pre_size)) => {
+                        let cur_end = *pre_start + *pre_size;
+                        if cur_end >= new_end {
+                            return;
+                        }
+                        if cur_end >= start {
+                            Entry::Occupied(ve.move_backward().expect("move back to merge"))
+                        } else {
+                            Entry::Vacant(ve)
+                        }
+                    }
+                },
+                Entry::Occupied(oe) => {
+                    if start + *oe.get() >= new_end {
                         return;
                     }
-                    if cur_end >= start {
-                        Entry::Occupied(ve.move_backward().expect("move back to merge"))
-                    } else {
-                        Entry::Vacant(ve)
-                    }
-                }
-            },
-            Entry::Occupied(oe) => {
-                if start + *oe.get() >= new_end {
-                    return;
-                }
-                Entry::Occupied(oe)
-            }
-        };
-
-        macro_rules! remove_intersect {
-            ($next_start: expr, $new_end: expr) => {
-                if let Some((last_start, last_size)) = self.tree.remove_range_with(
-                    $next_start..=$new_end,
-                    |_removed_start, removed_size| {
-                        self.space -= *removed_size;
-                    },
-                ) {
-                    let last_end = last_start + last_size;
-                    if last_end > new_end {
-                        let _size = last_end - new_end;
-                        // add back and join with previous range
-                        self.add(new_end, _size)
-                            .expect("add {new_end:?}:{_size:?} should not fail");
-                    }
+                    Entry::Occupied(oe)
                 }
             };
-        }
-        match base_ent {
-            Entry::Occupied(mut oe) => {
-                let base_start = *oe.key();
-                let old_size = *oe.get();
+            match base_ent {
+                Entry::Occupied(mut oe) => {
+                    let base_start = *oe.key();
+                    let old_size = *oe.get();
 
-                // extend the size to final size
-                let final_size = new_end - base_start;
-                self.space += final_size - old_size;
-                *oe.get_mut() = final_size;
+                    // extend the size to final size
+                    let final_size = new_end - base_start;
+                    self.space += final_size - old_size;
+                    *oe.get_mut() = final_size;
 
-                if let Some((_next_start, _next_size)) = oe.peek_forward() {
-                    let next_start = *_next_start;
-                    let next_size = *_next_size;
-                    if next_start < new_end {
-                        _ = oe;
-                        remove_intersect!(next_start, new_end);
-                    } else if next_start == new_end {
-                        // space is neutral (moving between segments)
-                        *oe.get_mut() += next_size;
-                        self.tree.remove(&next_start);
-                    }
-                }
-            }
-            Entry::Vacant(ve) => {
-                let base_start = start;
-                self.space += size;
-                match ve.peek_forward() {
-                    None => {
-                        ve.insert(size);
-                    }
-                    Some((_next_start, _next_size)) => {
-                        let next_start = *_next_start;
+                    if let Some((_next_start, _next_size)) = oe.peek_forward() {
+                        next_start = *_next_start;
                         let next_size = *_next_size;
                         if next_start < new_end {
-                            ve.insert(size);
-                            remove_intersect!(next_start, new_end);
+                            // fallback to remove range
                         } else if next_start == new_end {
-                            let final_size = new_end - base_start + next_size;
-                            ve.insert(final_size);
-                            self.tree.remove(&next_start);
+                            // space is neutral (moving between segments)
+                            *oe.get_mut() += next_size;
+                            // fallback to remove(next_start);
                         } else {
+                            return;
+                        }
+                    } else {
+                        return;
+                    }
+                }
+                Entry::Vacant(ve) => {
+                    let base_start = start;
+                    self.space += size;
+                    match ve.peek_forward() {
+                        None => {
                             ve.insert(size);
+                            return;
+                        }
+                        Some((_next_start, _next_size)) => {
+                            next_start = *_next_start;
+                            let next_size = *_next_size;
+                            if next_start < new_end {
+                                ve.insert(size);
+                                // fallback to remove range
+                            } else if next_start == new_end {
+                                let final_size = new_end - base_start + next_size;
+                                ve.insert(final_size);
+                                // fallback to remove(next_start);
+                            } else {
+                                ve.insert(size);
+                                return;
+                            }
                         }
                     }
                 }
             }
+        }
+        if next_start < new_end {
+            if let Some((last_start, last_size)) =
+                self.tree.remove_range_with(next_start..=new_end, |_removed_start, removed_size| {
+                    self.space -= *removed_size;
+                })
+            {
+                let last_end = last_start + last_size;
+                if last_end > new_end {
+                    let _size = last_end - new_end;
+                    // add back and join with previous range
+                    self.add(new_end, _size).expect("add {new_end:?}:{_size:?} should not fail");
+                }
+            }
+        } else {
+            assert_eq!(next_start, new_end);
+            self.tree.remove(&next_start);
         }
     }
 
@@ -312,65 +318,70 @@ impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
         O: RangeTreeOps<T>,
     {
         let end = start + size;
-        let ent = self.tree.entry(start);
-        match ent {
-            Entry::Occupied(mut oent) => {
-                let rs_size = *oent.get();
-                ops.op_remove(start, rs_size);
-                if rs_size == size {
-                    // Exact match or subset removed
-                    oent.remove();
-                    self.space -= rs_size;
-                    Ok(())
-                } else if rs_size > size {
-                    // Shrink from front
-                    let new_start = start + size;
-                    let new_size = rs_size - size;
-                    oent.alter_key(new_start).expect("shrink alter_key");
-                    *oent.get_mut() = new_size;
-                    ops.op_add(new_start, new_size);
-                    self.space -= size;
-                    Ok(())
-                } else {
-                    // existing range smaller than what need to remove
-                    Err(Some((start, rs_size)))
+        let new_size2: T;
+        {
+            let ent = self.tree.entry(start);
+            match ent {
+                Entry::Occupied(mut oent) => {
+                    let rs_size = *oent.get();
+                    ops.op_remove(start, rs_size);
+                    if rs_size == size {
+                        // Exact match or subset removed
+                        oent.remove();
+                        self.space -= rs_size;
+                        return Ok(());
+                    } else if rs_size > size {
+                        // Shrink from front
+                        let new_start = start + size;
+                        let new_size = rs_size - size;
+                        oent.alter_key(new_start).expect("shrink alter_key");
+                        *oent.get_mut() = new_size;
+                        ops.op_add(new_start, new_size);
+                        self.space -= size;
+                        return Ok(());
+                    } else {
+                        // existing range smaller than what need to remove
+                        return Err(Some((start, rs_size)));
+                    }
                 }
-            }
-            Entry::Vacant(vent) => {
-                if let Some((&rs_start, &rs_size)) = vent.peek_backward() {
-                    let rs_end = rs_start + rs_size;
-                    if rs_end > start {
-                        ops.op_remove(rs_start, rs_size);
-                        let mut oent = vent.move_backward().expect("move back to overlapping");
-                        if rs_end > end {
-                            let new_size = start - rs_start;
-                            // punch a hold in the middle
-                            *oent.get_mut() = new_size;
-                            ops.op_add(rs_start, new_size);
-                            let new_size2 = rs_end - end;
-                            // TODO optimize add insert after entry for btree
-                            self.tree.insert(end, new_size2);
-                            ops.op_add(end, new_size2);
-                            self.space -= size;
-                            Ok(())
-                        } else if rs_end == end {
-                            // Shrink from back
-                            let new_size = start - rs_start;
-                            *oent.get_mut() = new_size;
-                            ops.op_add(rs_start, new_size);
-                            self.space -= rs_end - start;
-                            Ok(())
+                Entry::Vacant(vent) => {
+                    if let Some((&rs_start, &rs_size)) = vent.peek_backward() {
+                        let rs_end = rs_start + rs_size;
+                        if rs_end > start {
+                            ops.op_remove(rs_start, rs_size);
+                            let mut oent = vent.move_backward().expect("move back to overlapping");
+                            if rs_end > end {
+                                let new_size = start - rs_start;
+                                // punch a hold in the middle
+                                *oent.get_mut() = new_size;
+                                ops.op_add(rs_start, new_size);
+                                new_size2 = rs_end - end;
+                                // fallback to except the borrowing
+                                // TODO optimize add insert after entry for btree
+                            } else if rs_end == end {
+                                // Shrink from back
+                                let new_size = start - rs_start;
+                                *oent.get_mut() = new_size;
+                                ops.op_add(rs_start, new_size);
+                                self.space -= rs_end - start;
+                                return Ok(());
+                            } else {
+                                return Err(Some((rs_start, rs_size)));
+                            }
                         } else {
-                            Err(Some((rs_start, rs_size)))
+                            return Err(None);
                         }
                     } else {
-                        Err(None)
+                        return Err(None);
                     }
-                } else {
-                    Err(None)
                 }
             }
         }
+
+        self.tree.insert(end, new_size2);
+        ops.op_add(end, new_size2);
+        self.space -= size;
+        Ok(())
     }
 
     /// Remove all the intersection ranges in the tree
