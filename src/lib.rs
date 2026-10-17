@@ -11,13 +11,17 @@ use core::{
     fmt,
     ops::{AddAssign, Bound, RangeBounds, SubAssign},
 };
-use embed_btree::btree::{BTreeMap, Cursor, Entry, IntoIter as _IntoIter, Iter as _Iter};
+use embed_btree::bptree::{BTree, Cursor, Entry, IntoIter as _IntoIter, Iter as _Iter, Stats};
+pub use embed_btree::{compact::Compact, large::TreeInfo};
 use num_traits::*;
 
 pub trait RangeTreeKey:
     Unsigned + AddAssign + SubAssign + Ord + Copy + fmt::Debug + fmt::Display + Default + 'static
 {
 }
+
+pub type RangeTreeCompact<T> = RangeTree<T, Compact>;
+pub type RangeTreeLarge<T> = RangeTree<T, TreeInfo>;
 
 impl<T> RangeTreeKey for T where
     T: Unsigned
@@ -33,8 +37,8 @@ impl<T> RangeTreeKey for T where
 }
 
 /// A b+tree stores range segment of [start, start+size)
-pub struct RangeTree<T: RangeTreeKey> {
-    tree: BTreeMap<T, T>,
+pub struct RangeTree<T: RangeTreeKey, S: Stats = Compact> {
+    tree: BTree<T, T, S>,
     space: T,
 }
 
@@ -58,9 +62,9 @@ impl<T: RangeTreeKey> RangeTreeOps<T> for DummyOps {
     fn op_remove(&mut self, _start: T, _size: T) {}
 }
 
-impl<T: RangeTreeKey> RangeTree<T> {
+impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
     pub fn new() -> Self {
-        Self { tree: BTreeMap::new(), space: T::zero() }
+        Self { tree: BTree::new(), space: T::zero() }
     }
 
     #[inline]
@@ -518,14 +522,16 @@ impl<T: RangeTreeKey> RangeTree<T> {
     pub fn validate(&self) {
         self.tree.validate();
     }
+}
 
+impl<T: RangeTreeKey> RangeTree<T, TreeInfo> {
     #[inline]
     pub fn memory_used(&self) -> usize {
         self.tree.memory_used()
     }
 }
 
-impl<'a, T: RangeTreeKey> IntoIterator for &'a RangeTree<T> {
+impl<'a, T: RangeTreeKey, S: Stats> IntoIterator for &'a RangeTree<T, S> {
     type Item = (T, T);
     type IntoIter = Iter<'a, T>;
 
@@ -535,9 +541,9 @@ impl<'a, T: RangeTreeKey> IntoIterator for &'a RangeTree<T> {
     }
 }
 
-impl<T: RangeTreeKey> IntoIterator for RangeTree<T> {
+impl<T: RangeTreeKey, S: Stats> IntoIterator for RangeTree<T, S> {
     type Item = (T, T);
-    type IntoIter = IntoIter<T>;
+    type IntoIter = IntoIter<T, S>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -558,9 +564,9 @@ impl<'a, T: RangeTreeKey> Iterator for Iter<'a, T> {
 }
 
 /// An consuming iterator for RangeTree
-pub struct IntoIter<T: RangeTreeKey>(_IntoIter<T, T>);
+pub struct IntoIter<T: RangeTreeKey, S: Stats>(_IntoIter<T, T, S>);
 
-impl<T: RangeTreeKey> Iterator for IntoIter<T> {
+impl<T: RangeTreeKey, S: Stats> Iterator for IntoIter<T, S> {
     type Item = (T, T);
 
     #[inline]
