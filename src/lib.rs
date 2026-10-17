@@ -240,11 +240,11 @@ impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
                         next_start = *_next_start;
                         let next_size = *_next_size;
                         if next_start < new_end {
-                            // fallback to remove range to escape lifetime
+                            // fall through to remove range to escape lifetime
                         } else if next_start == new_end {
                             // space is neutral (moving between segments)
                             *oe.get_mut() += next_size;
-                            // fallback to remove(next_start); to escape liftime
+                            // fall through to remove(next_start); to escape lifetime
                         } else {
                             return;
                         }
@@ -442,7 +442,7 @@ impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
                         {
                             start = *next_start;
                             size = end - *next_start;
-                            // fallthough
+                            // fallthrough
                             vent.move_forward().expect("move forward to overlapping")
                         } else {
                             return removed;
