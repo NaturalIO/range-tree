@@ -240,11 +240,11 @@ impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
                         next_start = *_next_start;
                         let next_size = *_next_size;
                         if next_start < new_end {
-                            // fallback to remove range
+                            // fallback to remove range to escape lifetime
                         } else if next_start == new_end {
                             // space is neutral (moving between segments)
                             *oe.get_mut() += next_size;
-                            // fallback to remove(next_start);
+                            // fallback to remove(next_start); to escape liftime
                         } else {
                             return;
                         }
@@ -356,7 +356,7 @@ impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
                                 *oent.get_mut() = new_size;
                                 ops.op_add(rs_start, new_size);
                                 new_size2 = rs_end - end;
-                                // fallback to except the borrowing
+                                // fallback to escape the lifetime borrowing
                                 // TODO optimize add insert after entry for btree
                             } else if rs_end == end {
                                 // Shrink from back
@@ -400,93 +400,89 @@ impl<T: RangeTreeKey, S: Stats> RangeTree<T, S> {
     #[inline]
     pub fn remove_loosely(&mut self, mut start: T, mut size: T) -> bool {
         let end = start + size;
-        let mut ent = self.tree.entry(start);
         let mut removed = false;
-        loop {
-            match ent {
-                Entry::Occupied(mut oent) => {
-                    let rs_size = *oent.get();
-                    if rs_size == size {
-                        // Exact match or subset removed
-                        oent.remove();
-                        self.space -= rs_size;
-                        return true;
-                    } else if rs_size > size {
-                        // Shrink from front
-                        let new_start = start + size;
-                        let new_size = rs_size - size;
-                        oent.alter_key(new_start).expect("shrink alter_key");
-                        *oent.get_mut() = new_size;
-                        self.space -= size;
-                        return true;
-                    } else {
-                        if let Some((_next_start, _next_size)) = oent.peek_forward()
-                            && *_next_start < end
-                        {
-                            start = *_next_start;
-                            size = end - start;
-                            self.space -= *oent.get();
-                            oent.remove();
-                            ent = self.tree.entry(start);
-                            removed = true;
-                            continue;
-                        }
-                        self.space -= rs_size;
-                        oent.remove();
-                        return true;
-                    }
-                }
+        let size_after_end;
+        'MAIN: loop {
+            let mut oent = match self.tree.entry(start) {
+                Entry::Occupied(oent) => oent,
                 Entry::Vacant(vent) => {
-                    if let Some((&rs_start, &rs_size)) = vent.peek_backward() {
-                        let rs_end = rs_start + rs_size;
-                        if rs_end > start {
-                            let mut oent = vent.move_backward().expect("move back to overlapping");
-                            if rs_end > end {
-                                let new_size = start - rs_start;
-                                // punch a hold in the middle
-                                *oent.get_mut() = new_size;
-                                let new_size2 = rs_end - end;
-                                // TODO optimize add insert after entry for btree
-                                self.tree.insert(end, new_size2);
-                                self.space -= size;
-                                return true;
+                    if let Some((rs_start, rs_size)) = vent.peek_backward()
+                        && *rs_start + *rs_size > start
+                    {
+                        let rs_end = *rs_start + *rs_size;
+                        let new_size = start - *rs_start;
+                        self.space -= *rs_size - new_size;
+                        let mut oent = vent.move_backward().expect("move back to overlapping");
+                        *oent.get_mut() = new_size;
+                        if rs_end == end {
+                            // rs_start < start <= rs_end = end
+                            return true;
+                        } else if rs_end < end {
+                            // rs_start < start <= rs_end <  end
+                            if let Some((next_start, _)) = oent.peek_forward()
+                                && *next_start < end
+                            {
+                                start = *next_start;
+                                size = end - *next_start;
+                                oent.move_forward().expect("move forward to overlapping")
                             } else {
-                                // Shrink from back
-                                let new_size = start - rs_start;
-                                *oent.get_mut() = new_size;
-                                self.space -= rs_end - start;
-                                if rs_end == end {
-                                    return true;
-                                }
-                                if let Some((next_start, _)) = oent.peek_forward()
-                                    && *next_start < end
-                                {
-                                    start = *next_start;
-                                    size = end - *next_start;
-                                    ent = Entry::Occupied(
-                                        oent.move_forward().expect("move forward to overlapping"),
-                                    );
-                                    continue;
-                                }
                                 return true;
                             }
+                        } else {
+                            debug_assert!(rs_end > end);
+                            size_after_end = rs_end - end;
+                            // TODO optimize add insert after entry for btree
+                            // break to escape lifetime borrowing and re-insert the rest
+                            break 'MAIN;
+                        }
+                    } else {
+                        // Handle the case where range starts before the first overlapping segment
+                        if let Some((next_start, _)) = vent.peek_forward()
+                            && *next_start < end
+                        {
+                            start = *next_start;
+                            size = end - *next_start;
+                            // fallthough
+                            vent.move_forward().expect("move forward to overlapping")
+                        } else {
+                            return removed;
                         }
                     }
-                    // Handle the case where range starts before the first overlapping segment
-                    if let Some((next_start, _)) = vent.peek_forward()
-                        && *next_start < end
-                    {
-                        start = *next_start;
-                        size = end - *next_start;
-                        ent = Entry::Occupied(
-                            vent.move_forward().expect("move forward to overlapping"),
-                        );
-                        continue;
-                    }
-                    return removed;
                 }
+            };
+            let rs_size = *oent.get();
+            if rs_size <= size {
+                let mut next = None;
+                if rs_size < size
+                    && let Some((_next_start, _next_size)) = oent.peek_forward()
+                    && *_next_start < end
+                {
+                    next.replace((*_next_start, end - *_next_start));
+                }
+                removed = true;
+                self.space -= rs_size;
+                oent.remove();
+                if let Some((next_start, next_size)) = next {
+                    start = next_start;
+                    size = next_size;
+                    // continue
+                } else {
+                    return true;
+                }
+            } else {
+                debug_assert!(rs_size > size);
+                // Shrink from front
+                let new_start = start + size;
+                let new_size = rs_size - size;
+                oent.alter_key(new_start).expect("shrink alter_key");
+                *oent.get_mut() = new_size;
+                self.space -= size;
+                return true;
             }
         }
+        self.tree.insert(end, size_after_end);
+        self.space += size_after_end;
+        true
     }
 
     /// return only when segment overlaps with start..end
